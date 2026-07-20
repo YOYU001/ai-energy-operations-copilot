@@ -136,6 +136,8 @@ AI Assistant 整合層
 
 完整規格見 `docs/RAG_SPIKE_PLAN.md`（範圍、必須驗證的 10 項、spike 不做清單、驗收輸出）。本文件只記錄它在整體 roadmap 裡的定位：**新 Step 6，插入在原本 Step 6 之前，不取代正式 RAG Step（新 Step 10），只驗證技術可行性**。
 
+**狀態：已完成並正式驗收關閉（Go）。** 完整 closeout 記錄見 `docs/RAG_SPIKE_PLAN.md` 第 18 節；Step 10 的 production integration plan（schema 差距分析、整合順序、rollback plan）已規劃完成、尚未執行，見同文件第 17 節。本次 closeout 決策維持第 9 節既有 roadmap 順序，**未提前執行 Step 10、未新增 ADR**。
+
 ---
 
 ## 9. 重排後的 Step 6–13 Roadmap

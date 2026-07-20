@@ -1,13 +1,20 @@
 # Step 6: RAG Document Ingestion Spike
 
+> **狀態：已正式驗收並關閉（Go）。** 完整 closeout 記錄見第 18 節。
 > 用途：保存 Step 6（RAG Document Ingestion Spike）的範圍、驗證項目、不做項目、驗收輸出與下一個最小步驟。
 > 定位：詳見 `docs/PROJECT_ALIGNMENT_REVIEW.md` 第 8、9 節與 `docs/DECISIONS.md` ADR-007。這是**新 Step 6**，插入在原本 Step 6（Frontend Foundation，現為新 Step 7）之前。
 
 子步驟命名：
-- **Sub-step 1: Test Corpus and Evaluation Set**（已完成，見第 7 節；17 題已落檔 `spike/test_questions.json`，含 `verification_tier`）
+- **Sub-step 1: Test Corpus and Evaluation Set**（已完成，見第 7 節）
 - **Sub-step 2: PDF Parsing and OCR Validation**（已完成並驗收，見第 8 節）
-- **Sub-step 3: Chunking Design**（已完成並驗收，見第 9 節；`structured_600_100` 為 provisional 推薦策略，非最終定案）
-- **Sub-step 4: Embedding and Vector Storage Spike**（尚未開始，見第 10 節）
+- **Sub-step 3: Chunking Design**（已完成並驗收，見第 9 節）
+- **Sub-step 4: Embedding and Vector Storage Spike**（已完成並驗收，見第 10 節）
+- **Sub-step 5: Hybrid Retrieval Scoring**（已完成並驗收，見第 11 節）
+- **Sub-step 6: Active Chunk Lifecycle / Blue-Green Cutover**（已完成並驗收，見第 13 節）
+- **Sub-step 7: Retrieval Evaluation Dataset Expansion**（已完成並驗收，見第 14 節）
+- **Sub-step 8: doc4 Table Detection + Ingestion**（已完成並驗收，見第 15、16 節）
+
+**下一個正式 Step：Step 7（Frontend Foundation），依 `docs/PROJECT_ALIGNMENT_REVIEW.md` §9 既有 roadmap 順序，未提前執行 Step 10。**
 
 ---
 
@@ -380,6 +387,65 @@ document_scoped 與 global 兩種 scope 各呼叫 embedding API 17 次（731 tok
 2. **表4-1 等 5 個表格的句尾截斷限制**維持 Sub-step 8 階段一的結論：已知、已記錄、不視為缺陷，未來若要用它們設計新 benchmark 題目需先讀完整 chunk text 確認。
 3. `is_active` 保留/清理策略、q03/q04/q05 ground truth 補完、`multi_chunk_coverage_threshold` 細緻化、q20 跨 chunk 失敗案例，皆維持未規劃狀態。
 
-## 17. 下一個最小步驟
+## 17. Step 10 Production Integration Plan（已規劃，尚未執行）
 
-`is_active` archival（清理/保留期限策略）、q03/q04/q05 的 ground truth 補完、`multi_chunk_coverage_threshold` 細緻化、q15 向量檢索盲點是否需要查詢改寫或架構調整、被截斷表格內容（表2-1/3-4/4-1/4-4/4-6）是否需要處理等方向皆尚未規劃，需等待另一輪 planning 與使用者確認。
+在 Step 6 closeout 規劃階段完成，內容尚未執行，保留於此供 Step 10（Knowledge Base / RAG 正式版）啟動時直接使用，不需要重新規劃：
+
+### Spike schema 與正式 schema 差距
+正式 `database/schema.sql` 的 `documents`/`document_chunks` 是 Step 1–5 時期的佔位設計，缺少 spike 已驗證的：deterministic `chunk_id`（正式版仍是 `SERIAL`）、lifecycle 欄位（`is_active`、`supersedes_document_id`）、idempotency hash 欄位（`embedding_content_hash`、`chunk_metadata_hash`）、完整頁碼 metadata（`page_index_start/end`、`pdf_page_number_start/end`、`printed_page_number_map`、`section_title`）、表格欄位（`chunk_type`、`table_title`）、embedding provenance 欄位（`embedding_provider`/`embedding_model`/`embedding_dimensions`/`embedding_model_version`/`embedded_at`）、`strategy_name`。`vector(1536)` 的欄位型別已由本次 spike 用真實 OpenAI model 驗證，Step 10 啟動時可將 schema 中「placeholder pending final embedding model choice」的註解移除。`datasets`/`energy_timeseries`/`case_records`/`analysis_runs`/`chat_messages` 五張表不受影響。
+
+### 建議的正式整合順序
+1. Migration 設計：把 lifecycle + idempotency 欄位正式搬進 `document_chunks`（`chunk_id` 改型別、加 hash/metadata 欄位），`documents` 補 `document_content_hash`。
+2. 程式碼搬遷：`spike/pdf_parser.py`+`ocr_fallback.py` → `backend/app/ingestion_rag.py`；`spike/chunker.py` → `backend/app/chunker.py`；`spike/hashing.py` → `backend/app/hashing.py`；`spike/embedding_provider.py` → `backend/app/embedding_provider.py`；`spike/vector_store.py` 查詢邏輯併入既有 DI 模式，比照 `datasets_queries.py` 拆到 `document_chunks_queries.py`；`spike/hybrid_retrieval.py`+`query_parser.py` → `backend/app/retrieval.py`。
+3. API 層：`POST /documents/upload`（比照 `POST /datasets/upload`）、`GET /documents/{id}/chunks`、內部 retrieval 函式（供未來 Step 12 AI Assistant 當 tool 使用，不對外開放獨立 search endpoint）。
+4. 正式測試：純函式（hashing/chunker/retrieval_metrics/query_parser）可直接重用；DB 相關（vector_store/chunk_lifecycle）需改寫成用 `backend/tests/fakes.py` 的 `FakeConnection`。
+5. Benchmark 收斂為迴歸測試：`retrieval_benchmark_report.json` 的 hit@1/3/5 基準值鎖進正式測試。
+
+### 重用 vs 重構
+- **可直接重用**：`hashing.py`、`chunker.py`、`retrieval_metrics.py`、`query_parser.py`（純函式，spike 期間刻意設計成不碰 DB/API）。
+- **需要重構**：`vector_store.py`（接入正式 DI 而非直接 `create_engine`）、`embedding_provider.py`（設定管理需與正式 `.env`/config 整合）、`run_*.py` driver script（拆成 API route + service 層）。
+- **需要新設計**：正式 `documents`/`document_chunks` migration SQL 本身（不可直接沿用 spike schema 的欄位命名/順序）。
+
+### 測試層級與 rollback plan
+- Unit（FakeConnection）：hashing、chunker、query_parser、retrieval_metrics。
+- Integration（真實 DB，開發環境）：ingestion idempotency、lifecycle cutover、hybrid retrieval 真實查詢。
+- Regression benchmark（真實 DB + API，人工觸發）：正式版 `run_retrieval_benchmark.py`，鎖定 hit@k 基準值。
+- Rollback：migration 一律用 `ADD COLUMN IF NOT EXISTS`（沿用 Sub-step 6 已驗證寫法），新欄位皆 nullable/有 default，可安全 `DROP COLUMN` 復原；正式 ingestion 沿用 blue-green lifecycle，任何一次失敗都不影響既有 `is_active=true` 版本。
+
+**此計畫已規劃完成但尚未執行**，等待 roadmap 排到 Step 10 時直接採用，不需要重新規劃。
+
+## 18. Step 6 Closeout（正式驗收關閉）
+
+**決策：Go — Step 6 正式驗收通過並關閉。維持原 roadmap，不提前執行 Step 10；下一個正式 Step 為 Step 7（Frontend Foundation）。未新增 ADR，因為 roadmap 順序沒有改變。**
+
+### 1. Step 6 已完成並正式 Go
+對照 `docs/RAG_SPIKE_PLAN.md` §5「驗收輸出」9 項全部達成：測試文件清單、測試問題與預期答案、Retrieval 結果、Citation 正確性結果、OCR 成功與失敗案例、已知限制、是否適合進入正式 RAG 開發（適合）、對新 Step 10 正式架構的建議（見第 17 節）、是否需要調整新 Step 6 之後的 roadmap（不需要，維持原順序）。§3「必須驗證的 10 項」全部至少完成一次真實資料驗證。
+
+### 2. 最終採用的技術決策
+- PDF parsing（PyMuPDF）+ 四態頁面分類 + OCR fallback（easyocr）
+- `structured_600_100` chunking 策略
+- Table-aware chunking：doc3 date-anchored 路徑 + doc4 caption-first 路徑（兩條獨立 state machine）
+- OpenAI `text-embedding-3-small`（1536 維）
+- PostgreSQL + pgvector（brute-force 查詢，暫不加 index）
+- Hybrid retrieval scoring（語意 + exact-date-match + table-query-match）
+- Active chunk lifecycle（deterministic chunk_id、is_active、blue-green cutover）
+- Benchmark 指標框架（hit@k、multi-chunk keyword coverage、document/global scope 區分）
+
+**明確暫不處理（排除於 Step 10 初版）**：圖片型表格 OCR、reranker、query rewrite、q15/q20 進階 retrieval 修法、vector index、LLM answer generation（屬未來 Step 12 AI Assistant 整合範圍）。
+
+### 3. 已知但不阻擋 MVP 的限制
+q15 真實向量檢索盲點（ground truth 存在但 top-30 撈不到）、q20 跨 chunk 檢索失敗（硬體規格 vs 投資成本相距 27 頁）、5 個表格句尾標點截斷（表2-1/3-4/4-1/4-4/4-6）、doc4 4 個圖片型表格無文字層無法辨識、`is_active` 保留/清理策略未實作、q03/q04/q05 尚未補 `expected_content_keywords`、`multi_chunk_coverage_threshold` 未依難度細緻化、`ocr_failed` 分支無真實案例觸發、`section_title` heuristic 涵蓋率未大規模驗證。全部已記錄、有明確原因、非 blocking。
+
+### 4. Step 10 Production Integration Plan
+已完成完整規劃（見第 17 節：schema 差距分析、整合順序、重用/重構清單、測試層級、rollback plan），**尚未執行**，等待 roadmap 排到 Step 10 時直接採用。
+
+### 5. 下一步
+**Step 7：Frontend Foundation**（依 `docs/PROJECT_ALIGNMENT_REVIEW.md` §9 既有 roadmap 順序）。本次 closeout 僅更新文件，未開始 Step 7 規劃或實作。
+
+### 6. pytest 最終狀態
+`python -m pytest -q` → **113 passed**。
+
+### 7. 真實文件、chunks 與 benchmark 最終結果
+- 4 份真實文件（doc1 掃描表單含 OCR、doc2 文字型 PDF、doc3 文字型 PDF、doc4 文字型 PDF），3 份已 ingest（doc1/doc3/doc4）
+- 真實 chunk 總數：doc1 2 + doc3 122 + doc4 157 = **281 chunks**，0 duplicate chunk_id、0 null embedding、全部 `is_active=true`
+- 正式 benchmark：17 個 eligible 題目，document_scoped 與 global 兩種 scope 皆執行；doc1/doc3 的 11 個 single_chunk 題目 hit@1 64%（hybrid）vs 45%（vector-only）、hit@3 91%、hit@5 100%，全程無 regression；doc4 新增 q27/q28 達成 hit@3/5=100%；q15 誠實記錄為真實檢索失敗（hit@1/3/5 全 False），未竄改 ground truth 或放寬判準
