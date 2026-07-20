@@ -1,0 +1,4 @@
+timestamp,site_id,electricity_price
+2026-07-11 08:00:00,site_001,3.5
+2026-07-11 09:00:00,site_001,N/A
+2026-07-11 10:00:00,site_001,4.2

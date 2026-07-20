@@ -1,0 +1,22 @@
+name: AI_Copilot
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - fastapi==0.139.0
+      - uvicorn[standard]==0.51.0
+      - sqlalchemy==2.0.51
+      - psycopg2-binary==2.9.12
+      - pandas==3.0.3
+      - python-multipart==0.0.32
+      - pytest==9.1.1
+      - httpx2==2.5.0
+      # required so the torch==2.13.0+cpu line below resolves in a fresh
+      # environment (verified via `conda env create` equivalent pip install)
+      - --extra-index-url https://download.pytorch.org/whl/cpu
+      - pymupdf==1.28.0
+      - torch==2.13.0+cpu
+      - easyocr==1.7.2
+      - openai==2.45.0

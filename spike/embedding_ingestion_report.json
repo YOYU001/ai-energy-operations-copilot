@@ -1,0 +1,121 @@
+{
+  "strategy": "structured_600_100",
+  "pass_1": {
+    "doc1": {
+      "filename": "新進人員實習表.pdf",
+      "document_content_hash": "4394d96bd67d1f66509b11907c7bed19f5239021c56e57035be79fe5bfd7da3a",
+      "db_document_id": 1,
+      "total_pages": 1,
+      "total_chunks": 2,
+      "stats": {
+        "total_chunks_considered": 2,
+        "inserted_new": 0,
+        "updated_metadata_only": 0,
+        "unchanged_skipped": 2,
+        "embedding_api_calls": 0,
+        "embedded_chunk_count": 0,
+        "prompt_tokens": 0,
+        "total_tokens": 0,
+        "failed_chunk_ids": []
+      },
+      "cutover_action": "already_active"
+    },
+    "doc3": {
+      "filename": "2415-1304研究報告-智能貨櫃屋 .pdf",
+      "document_content_hash": "bf118d333a3d4d91ff166c40b4f13deb370946e1c9d10efa37f75d91910d2a3d",
+      "db_document_id": 2,
+      "total_pages": 87,
+      "total_chunks": 122,
+      "stats": {
+        "total_chunks_considered": 122,
+        "inserted_new": 0,
+        "updated_metadata_only": 0,
+        "unchanged_skipped": 122,
+        "embedding_api_calls": 0,
+        "embedded_chunk_count": 0,
+        "prompt_tokens": 0,
+        "total_tokens": 0,
+        "failed_chunk_ids": []
+      },
+      "cutover_action": "already_active"
+    },
+    "doc4": {
+      "filename": "A 完整版本  鋰電池二次利用之電池管理系統開發研究完成報告.pdf",
+      "document_content_hash": "a6b6019fa3624bff6da50b195cb50c900e2024934d96b46c9a4b025c84e98cbb",
+      "db_document_id": 5,
+      "total_pages": 120,
+      "total_chunks": 157,
+      "stats": {
+        "total_chunks_considered": 157,
+        "inserted_new": 157,
+        "updated_metadata_only": 0,
+        "unchanged_skipped": 0,
+        "embedding_api_calls": 2,
+        "embedded_chunk_count": 157,
+        "prompt_tokens": 72049,
+        "total_tokens": 72049,
+        "failed_chunk_ids": []
+      },
+      "cutover_action": "activated"
+    }
+  },
+  "pass_2": {
+    "doc1": {
+      "filename": "新進人員實習表.pdf",
+      "document_content_hash": "4394d96bd67d1f66509b11907c7bed19f5239021c56e57035be79fe5bfd7da3a",
+      "db_document_id": 1,
+      "total_pages": 1,
+      "total_chunks": 2,
+      "stats": {
+        "total_chunks_considered": 2,
+        "inserted_new": 0,
+        "updated_metadata_only": 0,
+        "unchanged_skipped": 2,
+        "embedding_api_calls": 0,
+        "embedded_chunk_count": 0,
+        "prompt_tokens": 0,
+        "total_tokens": 0,
+        "failed_chunk_ids": []
+      },
+      "cutover_action": "already_active"
+    },
+    "doc3": {
+      "filename": "2415-1304研究報告-智能貨櫃屋 .pdf",
+      "document_content_hash": "bf118d333a3d4d91ff166c40b4f13deb370946e1c9d10efa37f75d91910d2a3d",
+      "db_document_id": 2,
+      "total_pages": 87,
+      "total_chunks": 122,
+      "stats": {
+        "total_chunks_considered": 122,
+        "inserted_new": 0,
+        "updated_metadata_only": 0,
+        "unchanged_skipped": 122,
+        "embedding_api_calls": 0,
+        "embedded_chunk_count": 0,
+        "prompt_tokens": 0,
+        "total_tokens": 0,
+        "failed_chunk_ids": []
+      },
+      "cutover_action": "already_active"
+    },
+    "doc4": {
+      "filename": "A 完整版本  鋰電池二次利用之電池管理系統開發研究完成報告.pdf",
+      "document_content_hash": "a6b6019fa3624bff6da50b195cb50c900e2024934d96b46c9a4b025c84e98cbb",
+      "db_document_id": 5,
+      "total_pages": 120,
+      "total_chunks": 157,
+      "stats": {
+        "total_chunks_considered": 157,
+        "inserted_new": 0,
+        "updated_metadata_only": 0,
+        "unchanged_skipped": 157,
+        "embedding_api_calls": 0,
+        "embedded_chunk_count": 0,
+        "prompt_tokens": 0,
+        "total_tokens": 0,
+        "failed_chunk_ids": []
+      },
+      "cutover_action": "already_active"
+    }
+  }
+}

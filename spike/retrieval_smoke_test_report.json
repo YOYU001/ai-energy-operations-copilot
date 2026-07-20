@@ -1,0 +1,132 @@
+{
+  "q06": {
+    "question": "表4中，2024年8月30日這天記錄了幾個超約時段？",
+    "expected_location": {
+      "pdf_page_number": 63,
+      "printed_page_number": "52",
+      "section_title": "四、實驗結果與效益分析 › 4.2 光儲系統自發自用效益 › 4.2.2 儲能系統調控邏輯驗證 › [1] 防超約控制驗證"
+    },
+    "top_k": [
+      {
+        "chunk_id": "45693d37bc5bf36a02a8d902620b321ec8b173d28da13ef589523354b79a3e93",
+        "chunk_type": "table",
+        "pdf_page_number_range": [
+          63,
+          63
+        ],
+        "printed_page_number_map": {
+          "63": "91"
+        },
+        "section_title": "4.2.2 儲能系統調控邏輯驗證",
+        "table_title": "表4. 系統超約事件紀錄",
+        "distance": 0.43943487763226696,
+        "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年8 月21 日\n10:45~11:00\n1.3\n1.1\n0.2\n0\n91\n11:00~11:15\n2.4\n2.2\n0.2\n0\n91\n11:15~11:30\n2.3\n1"
+      },
+      {
+        "chunk_id": "a4289caccd111446c1f53e495a60f704464d90f9415249753c81dcbff42020d6",
+        "chunk_type": "table",
+        "pdf_page_number_range": [
+          63,
+          64
+        ],
+        "printed_page_number_map": {
+          "63": "91",
+          "64": "53"
+        },
+        "section_title": "4.2.2 儲能系統調控邏輯驗證",
+        "table_title": "表4. 系統超約事件紀錄",
+        "distance": 0.44515866844524055,
+        "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年9 月16 日\n5:30~5:45\n0.6\n0.6\n0\n0\n91\n5:45~6:00\n2.3\n2.2\n0.1\n0\n91\n53\n6:00~6:15\n1.1\n1\n0.1\n"
+      },
+      {
+        "chunk_id": "6674d27e7a7e6ace96d9c05538e74add5442dfb4306fbe85a770212b9751debb",
+        "chunk_type": "table",
+        "pdf_page_number_range": [
+          63,
+          63
+        ],
+        "printed_page_number_map": {
+          "63": "91"
+        },
+        "section_title": "4.2.2 儲能系統調控邏輯驗證",
+        "table_title": "表4. 系統超約事件紀錄",
+        "distance": 0.44769970171577533,
+        "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年5 月4 日\n15:15~15:30\n2.3\n2.1\n0.2\n0\n84.5\n15:30~15:45\n2.4\n1.4\n0.5\n0.5\n84.5\n15:45~16:00\n"
+      },
+      {
+        "chunk_id": "2d3ae2f713a05109322a73b719cb8afc18f58b48d415afe8e91ca2feb4559927",
+        "chunk_type": "prose",
+        "pdf_page_number_range": [
+          11,
+          11
+        ],
+        "printed_page_number_map": {
+          "11": "VII"
+        },
+        "section_title": "3.4 OpenADR 3.0 標準通訊實作 ....................................................................... 40",
+        "table_title": null,
+        "distance": 0.46253737728016797,
+        "text_preview": ".................................. 46 圖19. 簡易型時間電價三段式 (114 年10 月1 日起適用) ............................\n.... 48 圖20. 契約容量管控圖............................."
+      },
+      {
+        "chunk_id": "47873aee1748aaa4cd82b93a26e3112c82e6f532ddb0685077e1b04a3a9590fd",
+        "chunk_type": "prose",
+        "pdf_page_number_range": [
+          64,
+          66
+        ],
+        "printed_page_number_map": {
+          "64": "53",
+          "65": "54",
+          "66": "55"
+        },
+        "section_title": "4.2.2 儲能系統調控邏輯驗證",
+        "table_title": null,
+        "distance": 0.5164055521613565,
+        "text_preview": "A. 第一階段：邏輯衝突與調適期（2024 年5 月至12 月）：在此 期間，系統共發生12 次超約紀錄，經逐筆數據解析，推測可 能原因是控制邏輯優先權倒置以及觸發失效。  嚴重邏輯瑕疵—超約時充電（9/12, 10/27）：數據顯示在 9/12 (08:45)與10/27 (19:30)時段，當"
+      }
+    ],
+    "citation_page_correctness_hit": true
+  },
+  "q11": {
+    "question": "新進人員實習表中，實習人員與導師姓名分別是誰？",
+    "expected_location": {
+      "pdf_page_number": 1,
+      "printed_page_number": null,
+      "section_title": null
+    },
+    "top_k": [
+      {
+        "chunk_id": "463bdff89e0ed9acf8dd48d33c2656a38577e061702d7643374e8628a2459b0e",
+        "chunk_type": "prose",
+        "pdf_page_number_range": [
+          1,
+          1
+        ],
+        "printed_page_number_map": {
+          "1": null
+        },
+        "section_title": null,
+        "table_title": null,
+        "distance": 0.5190621684481991,
+        "text_preview": "台灣電力股份有限公司派用人員實習(試用)輔導計畫 實習(試用)人員姓名:劉宥羽 導師姓名:廖健翔 實習(試用)期間 114 年 09 月 22 日~115 年 03月 21日 實習(試用)內容及考評部門 期間 天數 主題 項 目 實習(試用)部門及 定期考評方式及 指導人員 預定日期 1.陸域生態保"
+      },
+      {
+        "chunk_id": "7294bd42a219112fb2a5337151d0bfea1d8d22f3d6bf82412d7388968820753e",
+        "chunk_type": "prose",
+        "pdf_page_number_range": [
+          1,
+          1
+        ],
+        "printed_page_number_map": {
+          "1": null
+        },
+        "section_title": null,
+        "table_title": null,
+        "distance": 0.6262099133563291,
+        "text_preview": "用 邱智勇 化技術 2.觸媒檢測輿分析 1.電廠用水與淨化 電廠水處理 化學與環境研究室 處理 技術 曹志明 2.微藻固碳 1.雹池儲能應用技 儲能與電業 化學與環境研究室 術 材料技術 張書維 2.\n雹業材料化學 1140922~ 1141019 書面報告 1141019 28 1141020~ "
+      }
+    ],
+    "citation_page_correctness_hit": true
+  }
+}

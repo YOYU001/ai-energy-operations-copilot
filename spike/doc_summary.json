@@ -1,0 +1,31 @@
+{
+  "新進人員實習表.pdf": {
+    "total_pages": 1,
+    "status_counts": {
+      "scanned": 1
+    },
+    "ocr_applied": 1
+  },
+  "2415-1305研究報告-太陽光發電預測.pdf": {
+    "total_pages": 56,
+    "status_counts": {
+      "text": 56
+    },
+    "ocr_applied": 0
+  },
+  "2415-1304研究報告-智能貨櫃屋 .pdf": {
+    "total_pages": 87,
+    "status_counts": {
+      "text": 87
+    },
+    "ocr_applied": 0
+  },
+  "A 完整版本  鋰電池二次利用之電池管理系統開發研究完成報告.pdf": {
+    "total_pages": 120,
+    "status_counts": {
+      "text": 119,
+      "near_empty": 1
+    },
+    "ocr_applied": 0
+  }
+}

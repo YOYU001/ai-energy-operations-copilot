@@ -1,0 +1,987 @@
+{
+  "weights_used": {
+    "semantic": 1.0,
+    "exact_date_match": 0.5,
+    "table_query_match": 0.2
+  },
+  "candidate_pool_size": 30,
+  "results": {
+    "q06": {
+      "question": "表4中，2024年8月30日這天記錄了幾個超約時段？",
+      "source_document": "doc3",
+      "expected_location": {
+        "pdf_page_number": 63,
+        "printed_page_number": "52",
+        "section_title": "四、實驗結果與效益分析 › 4.2 光儲系統自發自用效益 › 4.2.2 儲能系統調控邏輯驗證 › [1] 防超約控制驗證"
+      },
+      "parsed_date_candidates": [
+        {
+          "year": 2024,
+          "month": 8,
+          "day": 30
+        }
+      ],
+      "table_query_detected": true,
+      "vector_only": {
+        "top_k": [
+          {
+            "rank": 1,
+            "chunk_id": "45693d37bc5bf36a02a8d902620b321ec8b173d28da13ef589523354b79a3e93",
+            "chunk_type": "table",
+            "pdf_page_number_range": [
+              63,
+              63
+            ],
+            "printed_page_number_map": {
+              "63": "91"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": "表4. 系統超約事件紀錄",
+            "vector_distance": 0.43945559910123977,
+            "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年8 月21 日\n10:45~11:00\n1.3\n1.1\n0.2\n0\n91\n11:00~11:15\n2.4\n2.2\n0.2\n0\n91\n11:15~11:30\n2.3\n1"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "a4289caccd111446c1f53e495a60f704464d90f9415249753c81dcbff42020d6",
+            "chunk_type": "table",
+            "pdf_page_number_range": [
+              63,
+              64
+            ],
+            "printed_page_number_map": {
+              "63": "91",
+              "64": "53"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": "表4. 系統超約事件紀錄",
+            "vector_distance": 0.445171887720045,
+            "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年9 月16 日\n5:30~5:45\n0.6\n0.6\n0\n0\n91\n5:45~6:00\n2.3\n2.2\n0.1\n0\n91\n53\n6:00~6:15\n1.1\n1\n0.1\n"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "6674d27e7a7e6ace96d9c05538e74add5442dfb4306fbe85a770212b9751debb",
+            "chunk_type": "table",
+            "pdf_page_number_range": [
+              63,
+              63
+            ],
+            "printed_page_number_map": {
+              "63": "91"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": "表4. 系統超約事件紀錄",
+            "vector_distance": 0.4477177090990937,
+            "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年5 月4 日\n15:15~15:30\n2.3\n2.1\n0.2\n0\n84.5\n15:30~15:45\n2.4\n1.4\n0.5\n0.5\n84.5\n15:45~16:00\n"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "2d3ae2f713a05109322a73b719cb8afc18f58b48d415afe8e91ca2feb4559927",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              11,
+              11
+            ],
+            "printed_page_number_map": {
+              "11": "VII"
+            },
+            "section_title": "3.4 OpenADR 3.0 標準通訊實作 ....................................................................... 40",
+            "table_title": null,
+            "vector_distance": 0.4625920197146588,
+            "text_preview": ".................................. 46 圖19. 簡易型時間電價三段式 (114 年10 月1 日起適用) ............................\n.... 48 圖20. 契約容量管控圖............................."
+          },
+          {
+            "rank": 5,
+            "chunk_id": "47873aee1748aaa4cd82b93a26e3112c82e6f532ddb0685077e1b04a3a9590fd",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              64,
+              66
+            ],
+            "printed_page_number_map": {
+              "64": "53",
+              "65": "54",
+              "66": "55"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "vector_distance": 0.5164619958756195,
+            "text_preview": "A. 第一階段：邏輯衝突與調適期（2024 年5 月至12 月）：在此 期間，系統共發生12 次超約紀錄，經逐筆數據解析，推測可 能原因是控制邏輯優先權倒置以及觸發失效。  嚴重邏輯瑕疵—超約時充電（9/12, 10/27）：數據顯示在 9/12 (08:45)與10/27 (19:30)時段，當"
+          }
+        ],
+        "citation_page_correctness_hit": true
+      },
+      "hybrid": {
+        "top_k": [
+          {
+            "rank": 1,
+            "chunk_id": "45693d37bc5bf36a02a8d902620b321ec8b173d28da13ef589523354b79a3e93",
+            "chunk_type": "table",
+            "pdf_page_number_range": [
+              63,
+              63
+            ],
+            "printed_page_number_map": {
+              "63": "91"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": "表4. 系統超約事件紀錄",
+            "score_breakdown": {
+              "vector_distance": 0.43945559910123977,
+              "semantic_score": 0.5605444008987602,
+              "exact_date_match": true,
+              "table_query_match": true,
+              "final_score": 1.26054440089876
+            },
+            "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年8 月21 日\n10:45~11:00\n1.3\n1.1\n0.2\n0\n91\n11:00~11:15\n2.4\n2.2\n0.2\n0\n91\n11:15~11:30\n2.3\n1"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "a4289caccd111446c1f53e495a60f704464d90f9415249753c81dcbff42020d6",
+            "chunk_type": "table",
+            "pdf_page_number_range": [
+              63,
+              64
+            ],
+            "printed_page_number_map": {
+              "63": "91",
+              "64": "53"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": "表4. 系統超約事件紀錄",
+            "score_breakdown": {
+              "vector_distance": 0.445171887720045,
+              "semantic_score": 0.554828112279955,
+              "exact_date_match": false,
+              "table_query_match": true,
+              "final_score": 0.7548281122799549
+            },
+            "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年9 月16 日\n5:30~5:45\n0.6\n0.6\n0\n0\n91\n5:45~6:00\n2.3\n2.2\n0.1\n0\n91\n53\n6:00~6:15\n1.1\n1\n0.1\n"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "6674d27e7a7e6ace96d9c05538e74add5442dfb4306fbe85a770212b9751debb",
+            "chunk_type": "table",
+            "pdf_page_number_range": [
+              63,
+              63
+            ],
+            "printed_page_number_map": {
+              "63": "91"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": "表4. 系統超約事件紀錄",
+            "score_breakdown": {
+              "vector_distance": 0.4477177090990937,
+              "semantic_score": 0.5522822909009063,
+              "exact_date_match": false,
+              "table_query_match": true,
+              "final_score": 0.7522822909009064
+            },
+            "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年5 月4 日\n15:15~15:30\n2.3\n2.1\n0.2\n0\n84.5\n15:30~15:45\n2.4\n1.4\n0.5\n0.5\n84.5\n15:45~16:00\n"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "2d3ae2f713a05109322a73b719cb8afc18f58b48d415afe8e91ca2feb4559927",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              11,
+              11
+            ],
+            "printed_page_number_map": {
+              "11": "VII"
+            },
+            "section_title": "3.4 OpenADR 3.0 標準通訊實作 ....................................................................... 40",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.4625920197146588,
+              "semantic_score": 0.5374079802853412,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.5374079802853412
+            },
+            "text_preview": ".................................. 46 圖19. 簡易型時間電價三段式 (114 年10 月1 日起適用) ............................\n.... 48 圖20. 契約容量管控圖............................."
+          },
+          {
+            "rank": 5,
+            "chunk_id": "47873aee1748aaa4cd82b93a26e3112c82e6f532ddb0685077e1b04a3a9590fd",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              64,
+              66
+            ],
+            "printed_page_number_map": {
+              "64": "53",
+              "65": "54",
+              "66": "55"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.5164619958756195,
+              "semantic_score": 0.4835380041243805,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.4835380041243805
+            },
+            "text_preview": "A. 第一階段：邏輯衝突與調適期（2024 年5 月至12 月）：在此 期間，系統共發生12 次超約紀錄，經逐筆數據解析，推測可 能原因是控制邏輯優先權倒置以及觸發失效。  嚴重邏輯瑕疵—超約時充電（9/12, 10/27）：數據顯示在 9/12 (08:45)與10/27 (19:30)時段，當"
+          }
+        ],
+        "citation_page_correctness_hit": true
+      }
+    },
+    "q11": {
+      "question": "新進人員實習表中，實習人員與導師姓名分別是誰？",
+      "source_document": "doc1",
+      "expected_location": {
+        "pdf_page_number": 1,
+        "printed_page_number": null,
+        "section_title": null
+      },
+      "parsed_date_candidates": [],
+      "table_query_detected": false,
+      "vector_only": {
+        "top_k": [
+          {
+            "rank": 1,
+            "chunk_id": "463bdff89e0ed9acf8dd48d33c2656a38577e061702d7643374e8628a2459b0e",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              1,
+              1
+            ],
+            "printed_page_number_map": {
+              "1": null
+            },
+            "section_title": null,
+            "table_title": null,
+            "vector_distance": 0.5190621684481991,
+            "text_preview": "台灣電力股份有限公司派用人員實習(試用)輔導計畫 實習(試用)人員姓名:劉宥羽 導師姓名:廖健翔 實習(試用)期間 114 年 09 月 22 日~115 年 03月 21日 實習(試用)內容及考評部門 期間 天數 主題 項 目 實習(試用)部門及 定期考評方式及 指導人員 預定日期 1.陸域生態保"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "7294bd42a219112fb2a5337151d0bfea1d8d22f3d6bf82412d7388968820753e",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              1,
+              1
+            ],
+            "printed_page_number_map": {
+              "1": null
+            },
+            "section_title": null,
+            "table_title": null,
+            "vector_distance": 0.6262099133563291,
+            "text_preview": "用 邱智勇 化技術 2.觸媒檢測輿分析 1.電廠用水與淨化 電廠水處理 化學與環境研究室 處理 技術 曹志明 2.微藻固碳 1.雹池儲能應用技 儲能與電業 化學與環境研究室 術 材料技術 張書維 2.\n雹業材料化學 1140922~ 1141019 書面報告 1141019 28 1141020~ "
+          }
+        ],
+        "citation_page_correctness_hit": true
+      },
+      "hybrid": {
+        "top_k": [
+          {
+            "rank": 1,
+            "chunk_id": "463bdff89e0ed9acf8dd48d33c2656a38577e061702d7643374e8628a2459b0e",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              1,
+              1
+            ],
+            "printed_page_number_map": {
+              "1": null
+            },
+            "section_title": null,
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.5190621684481991,
+              "semantic_score": 0.4809378315518009,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.4809378315518009
+            },
+            "text_preview": "台灣電力股份有限公司派用人員實習(試用)輔導計畫 實習(試用)人員姓名:劉宥羽 導師姓名:廖健翔 實習(試用)期間 114 年 09 月 22 日~115 年 03月 21日 實習(試用)內容及考評部門 期間 天數 主題 項 目 實習(試用)部門及 定期考評方式及 指導人員 預定日期 1.陸域生態保"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "7294bd42a219112fb2a5337151d0bfea1d8d22f3d6bf82412d7388968820753e",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              1,
+              1
+            ],
+            "printed_page_number_map": {
+              "1": null
+            },
+            "section_title": null,
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.6262099133563291,
+              "semantic_score": 0.37379008664367086,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.37379008664367086
+            },
+            "text_preview": "用 邱智勇 化技術 2.觸媒檢測輿分析 1.電廠用水與淨化 電廠水處理 化學與環境研究室 處理 技術 曹志明 2.微藻固碳 1.雹池儲能應用技 儲能與電業 化學與環境研究室 術 材料技術 張書維 2.\n雹業材料化學 1140922~ 1141019 書面報告 1141019 28 1141020~ "
+          }
+        ],
+        "citation_page_correctness_hit": true
+      }
+    },
+    "q02": {
+      "question": "本場域使用的混合型變流器型號與額定功率是多少？",
+      "source_document": "doc3",
+      "expected_location": {
+        "pdf_page_number": 36,
+        "printed_page_number": null,
+        "section_title": "三、試驗場域與系統建置 › 3.3 關鍵硬體設備規格詳述 › 3.3.1 硬體規格總表"
+      },
+      "parsed_date_candidates": [],
+      "table_query_detected": false,
+      "vector_only": {
+        "top_k": [
+          {
+            "rank": 1,
+            "chunk_id": "d9cfc7ec5b45193773ce30d386faa38c996c9ce6e2d6e286891b9f616297544e",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              77,
+              79
+            ],
+            "printed_page_number_map": {
+              "77": "66",
+              "78": "67",
+              "79": "68"
+            },
+            "section_title": "4.3.2 直流家電運轉相容性實證分析",
+            "table_title": null,
+            "vector_distance": 0.46345837119206645,
+            "text_preview": "充放電 切換之干擾，此結果佐證了混合變流器內部AC/DC 與DC/DC 轉換 模組具備優異之電氣隔離穩壓效果，展現出相較於傳統交流供電的品 質，確認了未來將辦公場域之基礎照明負載全面直流化之高可靠性與\n67\n實務應用價值。 圖35. 儲能調度期間之交直流側功率表現 (2025/01/22) [3] "
+          },
+          {
+            "rank": 2,
+            "chunk_id": "452b965bed1e720c7e132601077caaaefacaaab31fb283c8525d2f0707467c2b",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              49,
+              49
+            ],
+            "printed_page_number_map": {
+              "49": "38"
+            },
+            "section_title": "3.3.2 詳細規格說明：",
+            "table_title": null,
+            "vector_distance": 0.47988359580511164,
+            "text_preview": "J-45 (RS- 485)通訊介面與混合型變流器進行即時數據交換，回報電量 (SoC)與健康度。系統支援獨立運轉模式，在市電中斷時可作 為微電網之穩定電壓源。 [3] 轉換子系統：混合型變流器\n38\n 規格詳述：採用額定功率5 kW 之混合型變流器 (Hybrid Inverter)。  功能"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "b5db57e84a6a42e4b98d85286dac57e06a9a9cb24290131e657b0d70a88f23c9",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              77,
+              77
+            ],
+            "printed_page_number_map": {
+              "77": "66"
+            },
+            "section_title": "4.3.2 直流家電運轉相容性實證分析",
+            "table_title": null,
+            "vector_distance": 0.48140262588736615,
+            "text_preview": "冷氣或LED 燈）內部皆須配備整流器（Rectifier）將AC 轉回 DC 供馬達或LED 發光模組使用，本場域採用純直流供電，家電 端移除了整流元件，實測期間A 櫃冷氣與B 櫃照明皆未發生因\n66\n電壓波動導致之閃爍或當機現象，證明其相容性極佳。 [2] 運轉穩定度高： 在B 櫃整合型直流照明系"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "658526b75c13b400c5a8f8b03c0f63bfe54ec445b4d8b99eb66d32b330a7a0ca",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              47,
+              47
+            ],
+            "printed_page_number_map": {
+              "47": "36"
+            },
+            "section_title": "3.3 關鍵硬體設備規格詳述",
+            "table_title": null,
+            "vector_distance": 0.5000117959631382,
+            "text_preview": "制切離。  契約容量防護應用：當實測負載超過警戒線時，系統可精確 切斷次要迴路（如展示區燈光），保留必要維生設備。此邏輯 展示了在無法調度單一設備參數的場景下，如何透過迴路管 理達成總量管制。\n36\n3.3 關鍵硬體設備規格詳述 本試驗場域整合創能、儲能與車網互動設備，各子系統之詳細規格 與功能特"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "e2151b545f1e205f7dfdd103aafc232d020fd06a2d487e377485567945d57df2",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              30,
+              30
+            ],
+            "printed_page_number_map": {
+              "30": "19"
+            },
+            "section_title": "7.5 % - 10 %",
+            "table_title": null,
+            "vector_distance": 0.5021577169631574,
+            "text_preview": "住宅場域：直流微電網架構相較於AC 系統，可提升 6 %-15 %的整體效率 [16]。 [2] 高密度直流負載場域（如數據中心）：數據中心轉向直流微電網後， 節能效果可高達28 % [16]。\n19\n[3] LED 驅動優化：高效率AC 驅動器效率約為93-94 %，而直流LED 驅動器由於免除了"
+          }
+        ],
+        "citation_page_correctness_hit": false
+      },
+      "hybrid": {
+        "top_k": [
+          {
+            "rank": 1,
+            "chunk_id": "d9cfc7ec5b45193773ce30d386faa38c996c9ce6e2d6e286891b9f616297544e",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              77,
+              79
+            ],
+            "printed_page_number_map": {
+              "77": "66",
+              "78": "67",
+              "79": "68"
+            },
+            "section_title": "4.3.2 直流家電運轉相容性實證分析",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.46345837119206645,
+              "semantic_score": 0.5365416288079335,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.5365416288079335
+            },
+            "text_preview": "充放電 切換之干擾，此結果佐證了混合變流器內部AC/DC 與DC/DC 轉換 模組具備優異之電氣隔離穩壓效果，展現出相較於傳統交流供電的品 質，確認了未來將辦公場域之基礎照明負載全面直流化之高可靠性與\n67\n實務應用價值。 圖35. 儲能調度期間之交直流側功率表現 (2025/01/22) [3] "
+          },
+          {
+            "rank": 2,
+            "chunk_id": "452b965bed1e720c7e132601077caaaefacaaab31fb283c8525d2f0707467c2b",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              49,
+              49
+            ],
+            "printed_page_number_map": {
+              "49": "38"
+            },
+            "section_title": "3.3.2 詳細規格說明：",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.47988359580511164,
+              "semantic_score": 0.5201164041948884,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.5201164041948884
+            },
+            "text_preview": "J-45 (RS- 485)通訊介面與混合型變流器進行即時數據交換，回報電量 (SoC)與健康度。系統支援獨立運轉模式，在市電中斷時可作 為微電網之穩定電壓源。 [3] 轉換子系統：混合型變流器\n38\n 規格詳述：採用額定功率5 kW 之混合型變流器 (Hybrid Inverter)。  功能"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "b5db57e84a6a42e4b98d85286dac57e06a9a9cb24290131e657b0d70a88f23c9",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              77,
+              77
+            ],
+            "printed_page_number_map": {
+              "77": "66"
+            },
+            "section_title": "4.3.2 直流家電運轉相容性實證分析",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.48140262588736615,
+              "semantic_score": 0.5185973741126338,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.5185973741126338
+            },
+            "text_preview": "冷氣或LED 燈）內部皆須配備整流器（Rectifier）將AC 轉回 DC 供馬達或LED 發光模組使用，本場域採用純直流供電，家電 端移除了整流元件，實測期間A 櫃冷氣與B 櫃照明皆未發生因\n66\n電壓波動導致之閃爍或當機現象，證明其相容性極佳。 [2] 運轉穩定度高： 在B 櫃整合型直流照明系"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "658526b75c13b400c5a8f8b03c0f63bfe54ec445b4d8b99eb66d32b330a7a0ca",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              47,
+              47
+            ],
+            "printed_page_number_map": {
+              "47": "36"
+            },
+            "section_title": "3.3 關鍵硬體設備規格詳述",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.5000117959631382,
+              "semantic_score": 0.49998820403686184,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.49998820403686184
+            },
+            "text_preview": "制切離。  契約容量防護應用：當實測負載超過警戒線時，系統可精確 切斷次要迴路（如展示區燈光），保留必要維生設備。此邏輯 展示了在無法調度單一設備參數的場景下，如何透過迴路管 理達成總量管制。\n36\n3.3 關鍵硬體設備規格詳述 本試驗場域整合創能、儲能與車網互動設備，各子系統之詳細規格 與功能特"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "e2151b545f1e205f7dfdd103aafc232d020fd06a2d487e377485567945d57df2",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              30,
+              30
+            ],
+            "printed_page_number_map": {
+              "30": "19"
+            },
+            "section_title": "7.5 % - 10 %",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.5021577169631574,
+              "semantic_score": 0.49784228303684264,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.49784228303684264
+            },
+            "text_preview": "住宅場域：直流微電網架構相較於AC 系統，可提升 6 %-15 %的整體效率 [16]。 [2] 高密度直流負載場域（如數據中心）：數據中心轉向直流微電網後， 節能效果可高達28 % [16]。\n19\n[3] LED 驅動優化：高效率AC 驅動器效率約為93-94 %，而直流LED 驅動器由於免除了"
+          }
+        ],
+        "citation_page_correctness_hit": false
+      }
+    },
+    "q05": {
+      "question": "第一階段（2024/5–12）與第二階段（2025/1–12）的超約事件邏輯缺陷有何差異？",
+      "source_document": "doc3",
+      "expected_location": {
+        "pdf_page_number": 63,
+        "printed_page_number": null,
+        "section_title": "四、實驗結果與效益分析 › 4.2 光儲系統自發自用效益 › 4.2.2 儲能系統調控邏輯驗證"
+      },
+      "parsed_date_candidates": [],
+      "table_query_detected": false,
+      "vector_only": {
+        "top_k": [
+          {
+            "rank": 1,
+            "chunk_id": "bdb7cd1e8122b529f6d2e33c8d8733caf0e80ac38bcfdd71a89d61d7d18e3fc9",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              66,
+              67
+            ],
+            "printed_page_number_map": {
+              "66": "55",
+              "67": "56"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "vector_distance": 0.45633490056841497,
+            "text_preview": "時， 未能成功下達放電指令，推測與雲端控制之通訊延遲或觸 發門檻設定過高有關。 圖25. 2024/5/4 系統超約事件 (儲能未作動) 圖26. 2024/7/9 系統超約事件 (儲能未作動)\n55\nB. 第二階段：邏輯收斂與穩定期（2025 年1 月到12 月）：進入 2025 年後，上述「誤充"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "47873aee1748aaa4cd82b93a26e3112c82e6f532ddb0685077e1b04a3a9590fd",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              64,
+              66
+            ],
+            "printed_page_number_map": {
+              "64": "53",
+              "65": "54",
+              "66": "55"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "vector_distance": 0.4623673339917477,
+            "text_preview": "A. 第一階段：邏輯衝突與調適期（2024 年5 月至12 月）：在此 期間，系統共發生12 次超約紀錄，經逐筆數據解析，推測可 能原因是控制邏輯優先權倒置以及觸發失效。  嚴重邏輯瑕疵—超約時充電（9/12, 10/27）：數據顯示在 9/12 (08:45)與10/27 (19:30)時段，當"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "a071c3cab112671ec6bd06630f1a4bcd4185a35db80145dca9a98a9f4a9bab36",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              11,
+              11
+            ],
+            "printed_page_number_map": {
+              "11": "VII"
+            },
+            "section_title": "3.4 OpenADR 3.0 標準通訊實作 ....................................................................... 40",
+            "table_title": null,
+            "vector_distance": 0.5683765214501607,
+            "text_preview": ".................................................. 54 圖26. 2024/7/9 系統超約事件 (儲能未作動) .................\n...................................... 54 圖27. 20"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "45693d37bc5bf36a02a8d902620b321ec8b173d28da13ef589523354b79a3e93",
+            "chunk_type": "table",
+            "pdf_page_number_range": [
+              63,
+              63
+            ],
+            "printed_page_number_map": {
+              "63": "91"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": "表4. 系統超約事件紀錄",
+            "vector_distance": 0.584727075852014,
+            "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年8 月21 日\n10:45~11:00\n1.3\n1.1\n0.2\n0\n91\n11:00~11:15\n2.4\n2.2\n0.2\n0\n91\n11:15~11:30\n2.3\n1"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "3d68edfa4b77f38988a6b1615adc49ec4b7d7f980469492f48087869f4e48bcb",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              52,
+              54
+            ],
+            "printed_page_number_map": {
+              "52": "41",
+              "53": "42",
+              "54": "43"
+            },
+            "section_title": "3.4.2 需量反應互動生命週期",
+            "table_title": null,
+            "vector_distance": 0.5879162449840751,
+            "text_preview": " 匯入得標單，並向RA 進行資源預約，系統自動排定未來 的需量反應任務。 [2] 待命期 (Standby Phase)：用戶通知  任務預告：在排定之需量反應開始前30 分鐘，系統進入待命 狀態。\n42\n 可視化通知：系統看板顯示新需量任務卡片，明確告知用戶 即將執行的任務起訖時間，讓場域管理"
+          }
+        ],
+        "citation_page_correctness_hit": true
+      },
+      "hybrid": {
+        "top_k": [
+          {
+            "rank": 1,
+            "chunk_id": "bdb7cd1e8122b529f6d2e33c8d8733caf0e80ac38bcfdd71a89d61d7d18e3fc9",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              66,
+              67
+            ],
+            "printed_page_number_map": {
+              "66": "55",
+              "67": "56"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.45633490056841497,
+              "semantic_score": 0.543665099431585,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.543665099431585
+            },
+            "text_preview": "時， 未能成功下達放電指令，推測與雲端控制之通訊延遲或觸 發門檻設定過高有關。 圖25. 2024/5/4 系統超約事件 (儲能未作動) 圖26. 2024/7/9 系統超約事件 (儲能未作動)\n55\nB. 第二階段：邏輯收斂與穩定期（2025 年1 月到12 月）：進入 2025 年後，上述「誤充"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "47873aee1748aaa4cd82b93a26e3112c82e6f532ddb0685077e1b04a3a9590fd",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              64,
+              66
+            ],
+            "printed_page_number_map": {
+              "64": "53",
+              "65": "54",
+              "66": "55"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.4623673339917477,
+              "semantic_score": 0.5376326660082523,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.5376326660082523
+            },
+            "text_preview": "A. 第一階段：邏輯衝突與調適期（2024 年5 月至12 月）：在此 期間，系統共發生12 次超約紀錄，經逐筆數據解析，推測可 能原因是控制邏輯優先權倒置以及觸發失效。  嚴重邏輯瑕疵—超約時充電（9/12, 10/27）：數據顯示在 9/12 (08:45)與10/27 (19:30)時段，當"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "a071c3cab112671ec6bd06630f1a4bcd4185a35db80145dca9a98a9f4a9bab36",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              11,
+              11
+            ],
+            "printed_page_number_map": {
+              "11": "VII"
+            },
+            "section_title": "3.4 OpenADR 3.0 標準通訊實作 ....................................................................... 40",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.5683765214501607,
+              "semantic_score": 0.4316234785498393,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.4316234785498393
+            },
+            "text_preview": ".................................................. 54 圖26. 2024/7/9 系統超約事件 (儲能未作動) .................\n...................................... 54 圖27. 20"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "45693d37bc5bf36a02a8d902620b321ec8b173d28da13ef589523354b79a3e93",
+            "chunk_type": "table",
+            "pdf_page_number_range": [
+              63,
+              63
+            ],
+            "printed_page_number_map": {
+              "63": "91"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": "表4. 系統超約事件紀錄",
+            "score_breakdown": {
+              "vector_distance": 0.584727075852014,
+              "semantic_score": 0.415272924147986,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.415272924147986
+            },
+            "text_preview": "表4. 系統超約事件紀錄\n日期 時間 需量 (kW) 市電 (kW) PV (kW) 儲能 (kW) 儲能SOC (%)\n2024 年8 月21 日\n10:45~11:00\n1.3\n1.1\n0.2\n0\n91\n11:00~11:15\n2.4\n2.2\n0.2\n0\n91\n11:15~11:30\n2.3\n1"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "3d68edfa4b77f38988a6b1615adc49ec4b7d7f980469492f48087869f4e48bcb",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              52,
+              54
+            ],
+            "printed_page_number_map": {
+              "52": "41",
+              "53": "42",
+              "54": "43"
+            },
+            "section_title": "3.4.2 需量反應互動生命週期",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.5879162449840751,
+              "semantic_score": 0.41208375501592487,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.41208375501592487
+            },
+            "text_preview": " 匯入得標單，並向RA 進行資源預約，系統自動排定未來 的需量反應任務。 [2] 待命期 (Standby Phase)：用戶通知  任務預告：在排定之需量反應開始前30 分鐘，系統進入待命 狀態。\n42\n 可視化通知：系統看板顯示新需量任務卡片，明確告知用戶 即將執行的任務起訖時間，讓場域管理"
+          }
+        ],
+        "citation_page_correctness_hit": true
+      }
+    },
+    "q13": {
+      "question": "低碳綠能儲能整合系統是否曾因「應放未放」事件導致電池過熱？",
+      "source_document": "doc3",
+      "expected_location": {},
+      "parsed_date_candidates": [],
+      "table_query_detected": false,
+      "vector_only": {
+        "top_k": [
+          {
+            "rank": 1,
+            "chunk_id": "c10e84dab05dfac16a9c91916d60289a8beebc65feb067f6ee4ee4db02b01684",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              67,
+              68
+            ],
+            "printed_page_number_map": {
+              "67": "56",
+              "68": "57"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "vector_distance": 0.41037038462454545,
+            "text_preview": "量 控制）時發生了優先權衝突；然而，隨著2025 年數據之收斂，證實 該軟體問題已獲得解決。此案例凸顯了場域導入雲端能源管理系統時， 可能須經過至少6 個月實際運轉之邏輯驗證期，以抓出潛在之韌體\n56\nBug 並進行參數優化，方能確保系統之長期可靠度。 [2] 餘電儲存驗證 接著同樣利用2024 年"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "47873aee1748aaa4cd82b93a26e3112c82e6f532ddb0685077e1b04a3a9590fd",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              64,
+              66
+            ],
+            "printed_page_number_map": {
+              "64": "53",
+              "65": "54",
+              "66": "55"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "vector_distance": 0.42807255284924406,
+            "text_preview": "A. 第一階段：邏輯衝突與調適期（2024 年5 月至12 月）：在此 期間，系統共發生12 次超約紀錄，經逐筆數據解析，推測可 能原因是控制邏輯優先權倒置以及觸發失效。  嚴重邏輯瑕疵—超約時充電（9/12, 10/27）：數據顯示在 9/12 (08:45)與10/27 (19:30)時段，當"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "bdb7cd1e8122b529f6d2e33c8d8733caf0e80ac38bcfdd71a89d61d7d18e3fc9",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              66,
+              67
+            ],
+            "printed_page_number_map": {
+              "66": "55",
+              "67": "56"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "vector_distance": 0.43998859830728065,
+            "text_preview": "時， 未能成功下達放電指令，推測與雲端控制之通訊延遲或觸 發門檻設定過高有關。 圖25. 2024/5/4 系統超約事件 (儲能未作動) 圖26. 2024/7/9 系統超約事件 (儲能未作動)\n55\nB. 第二階段：邏輯收斂與穩定期（2025 年1 月到12 月）：進入 2025 年後，上述「誤充"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "cba1174610ba0a0ea19e4d4fc99a74d3a9b2187247d7eb758ba0007bf0998fb8",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              69,
+              70
+            ],
+            "printed_page_number_map": {
+              "69": "58",
+              "70": "59"
+            },
+            "section_title": "4.2.3 總體節電成效與經濟效益量化分析",
+            "table_title": null,
+            "vector_distance": 0.44866907943433265,
+            "text_preview": "%以下，顯示廠商可能在該時間點才 進行了有效的邏輯修正。 0.8 0.85 0.9 0.95 1 0 200 400 600 800 浪費率百分比 次數 有效餘電儲存機會 餘電未儲存 綠電浪費率\n58\n此外，數據亦揭露了系統控制邏輯的另一嚴重缺陷「尖峰時段異常 充電」，儘管全期發生次數350 次佔比"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "5f2192ebd491ff75a18f65d468363b630775364ff7c31d7e996544154d893953",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              16,
+              17
+            ],
+            "printed_page_number_map": {
+              "16": "5",
+              "17": "6"
+            },
+            "section_title": "1.2.2 驗證商業化EMS 智慧控制策略之可行性與經濟效益",
+            "table_title": null,
+            "vector_distance": 0.464768378201041,
+            "text_preview": " 時且正確地啟動儲能放電或卸載，避免產生超約罰款。 [2] 太陽能餘電利用（Self-Consumption Optimization）： 追蹤綠電回 充效率，檢視系統降低綠電溢散（浪費）之實際表現。\n6"
+          }
+        ],
+        "citation_page_correctness_hit": false
+      },
+      "hybrid": {
+        "top_k": [
+          {
+            "rank": 1,
+            "chunk_id": "c10e84dab05dfac16a9c91916d60289a8beebc65feb067f6ee4ee4db02b01684",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              67,
+              68
+            ],
+            "printed_page_number_map": {
+              "67": "56",
+              "68": "57"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.41037038462454545,
+              "semantic_score": 0.5896296153754546,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.5896296153754546
+            },
+            "text_preview": "量 控制）時發生了優先權衝突；然而，隨著2025 年數據之收斂，證實 該軟體問題已獲得解決。此案例凸顯了場域導入雲端能源管理系統時， 可能須經過至少6 個月實際運轉之邏輯驗證期，以抓出潛在之韌體\n56\nBug 並進行參數優化，方能確保系統之長期可靠度。 [2] 餘電儲存驗證 接著同樣利用2024 年"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "47873aee1748aaa4cd82b93a26e3112c82e6f532ddb0685077e1b04a3a9590fd",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              64,
+              66
+            ],
+            "printed_page_number_map": {
+              "64": "53",
+              "65": "54",
+              "66": "55"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.42807255284924406,
+              "semantic_score": 0.5719274471507559,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.5719274471507559
+            },
+            "text_preview": "A. 第一階段：邏輯衝突與調適期（2024 年5 月至12 月）：在此 期間，系統共發生12 次超約紀錄，經逐筆數據解析，推測可 能原因是控制邏輯優先權倒置以及觸發失效。  嚴重邏輯瑕疵—超約時充電（9/12, 10/27）：數據顯示在 9/12 (08:45)與10/27 (19:30)時段，當"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "bdb7cd1e8122b529f6d2e33c8d8733caf0e80ac38bcfdd71a89d61d7d18e3fc9",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              66,
+              67
+            ],
+            "printed_page_number_map": {
+              "66": "55",
+              "67": "56"
+            },
+            "section_title": "4.2.2 儲能系統調控邏輯驗證",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.43998859830728065,
+              "semantic_score": 0.5600114016927193,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.5600114016927193
+            },
+            "text_preview": "時， 未能成功下達放電指令，推測與雲端控制之通訊延遲或觸 發門檻設定過高有關。 圖25. 2024/5/4 系統超約事件 (儲能未作動) 圖26. 2024/7/9 系統超約事件 (儲能未作動)\n55\nB. 第二階段：邏輯收斂與穩定期（2025 年1 月到12 月）：進入 2025 年後，上述「誤充"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "cba1174610ba0a0ea19e4d4fc99a74d3a9b2187247d7eb758ba0007bf0998fb8",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              69,
+              70
+            ],
+            "printed_page_number_map": {
+              "69": "58",
+              "70": "59"
+            },
+            "section_title": "4.2.3 總體節電成效與經濟效益量化分析",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.44866907943433265,
+              "semantic_score": 0.5513309205656673,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.5513309205656673
+            },
+            "text_preview": "%以下，顯示廠商可能在該時間點才 進行了有效的邏輯修正。 0.8 0.85 0.9 0.95 1 0 200 400 600 800 浪費率百分比 次數 有效餘電儲存機會 餘電未儲存 綠電浪費率\n58\n此外，數據亦揭露了系統控制邏輯的另一嚴重缺陷「尖峰時段異常 充電」，儘管全期發生次數350 次佔比"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "5f2192ebd491ff75a18f65d468363b630775364ff7c31d7e996544154d893953",
+            "chunk_type": "prose",
+            "pdf_page_number_range": [
+              16,
+              17
+            ],
+            "printed_page_number_map": {
+              "16": "5",
+              "17": "6"
+            },
+            "section_title": "1.2.2 驗證商業化EMS 智慧控制策略之可行性與經濟效益",
+            "table_title": null,
+            "score_breakdown": {
+              "vector_distance": 0.464768378201041,
+              "semantic_score": 0.535231621798959,
+              "exact_date_match": false,
+              "table_query_match": false,
+              "final_score": 0.535231621798959
+            },
+            "text_preview": " 時且正確地啟動儲能放電或卸載，避免產生超約罰款。 [2] 太陽能餘電利用（Self-Consumption Optimization）： 追蹤綠電回 充效率，檢視系統降低綠電溢散（浪費）之實際表現。\n6"
+          }
+        ],
+        "citation_page_correctness_hit": false
+      }
+    }
+  },
+  "api_calls": 5,
+  "total_tokens": 185
+}

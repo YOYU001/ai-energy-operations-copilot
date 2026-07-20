@@ -1,0 +1,21 @@
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+sqlalchemy==2.0.51
+psycopg2-binary==2.9.12
+pandas==3.0.3
+python-multipart==0.0.32
+pytest==9.1.1
+httpx2==2.5.0
+
+# RAG spike (Step 6 Sub-step 2): PDF parsing + OCR
+# --extra-index-url below is required for the torch==2.13.0+cpu line to
+# resolve (the +cpu build is not published to the default PyPI index, only
+# to PyTorch's own CPU index). This makes `pip install -r requirements.txt`
+# work as a single command in a fresh environment, with no manual step.
+--extra-index-url https://download.pytorch.org/whl/cpu
+pymupdf==1.28.0
+torch==2.13.0+cpu
+easyocr==1.7.2
+
+# RAG spike (Step 6 Sub-step 4): embedding provider
+openai==2.45.0
