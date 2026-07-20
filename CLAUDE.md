@@ -42,6 +42,13 @@
 - **Vector Search**：優先使用 pgvector，Chroma 僅作為未來 fallback（目前完全未實作，先以 pgvector 驗證可行性）。
 - **Default mode**：Internal Knowledge Only，規則詳見「資料與回答原則」章節。
 
+## 模組化規則
+
+以下規則檔案透過 `@` import 引入，內容見 `.claude/rules/README.md`：
+
+@.claude/rules/code-style.md
+@.claude/rules/frontend/react.md
+
 ## 常用指令 (Commands)
 
 Conda environment：`AI_Copilot`（Python 3.11）。所有 Python 開發限定在此獨立環境中進行，因為 backend 依賴（torch、easyocr 等）版本特殊，混用 `base` 或全域 Python 容易造成套件衝突、難以重現的環境問題。安裝 Python package 前須先詢問使用者並取得同意，安裝後同步更新 `requirements.txt` 與 `environment.yml`；frontend package 則更新於 `package.json`。

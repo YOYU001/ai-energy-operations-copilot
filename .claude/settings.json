@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/check_conda_env.ps1",
+            "timeout": 10,
+            "statusMessage": "Checking conda environment for python command..."
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/check_md_language.ps1",
+            "timeout": 10,
+            "statusMessage": "Checking markdown language ratio..."
+          }
+        ]
+      }
+    ]
+  }
+}

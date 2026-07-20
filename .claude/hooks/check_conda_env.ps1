@@ -1,0 +1,66 @@
+# PreToolUse hook for the Bash tool.
+#
+# Blocks python invocations that don't reference the AI_Copilot conda
+# environment, per CLAUDE.md's "Python Environment Rules" (all Python work
+# must happen in AI_Copilot, never base or a global interpreter).
+#
+# Why check the command TEXT instead of $env:CONDA_DEFAULT_ENV: each Bash
+# tool call starts a fresh shell with no persisted "conda activate" state
+# (shell state does not carry over between Bash calls), and this hook is a
+# separate process from that shell anyway -- its own environment reflects
+# whatever Claude Code itself was launched in, not the upcoming command's
+# environment. Checking whether the command string itself activates or
+# targets AI_Copilot is the only signal that is actually reliable here.
+
+$ErrorActionPreference = "SilentlyContinue"
+
+$rawInput = [Console]::In.ReadToEnd()
+if ([string]::IsNullOrWhiteSpace($rawInput)) {
+    Write-Output '{}'
+    exit 0
+}
+
+try {
+    $payload = $rawInput | ConvertFrom-Json
+} catch {
+    Write-Output '{}'
+    exit 0
+}
+
+$cmd = $payload.tool_input.command
+if ([string]::IsNullOrWhiteSpace($cmd)) {
+    Write-Output '{}'
+    exit 0
+}
+
+# Only care about commands that actually invoke a "python"/"python3" binary,
+# not e.g. a filename that happens to contain "python" as a substring.
+$invokesPython = $cmd -match '(^|[^A-Za-z0-9_])python3?([^A-Za-z0-9_]|$)'
+
+if ($invokesPython) {
+    # Harmless, environment-independent invocations are exempt.
+    $isHarmless = $cmd -match '--version|--help|(^|[^A-Za-z0-9_])-V([^A-Za-z0-9_]|$)'
+
+    if (-not $isHarmless) {
+        $referencesEnv = $cmd -match 'AI_Copilot'
+
+        if (-not $referencesEnv) {
+            $reason = "This command invokes python but does not reference the AI_Copilot conda environment. " +
+                      "Per CLAUDE.md, all Python work must run in AI_Copilot. Prefix the command with: " +
+                      "source /c/Users/User/anaconda3/etc/profile.d/conda.sh && conda activate AI_Copilot && <your command> " +
+                      "(or call the AI_Copilot env's python.exe directly), then retry."
+            $result = @{
+                hookSpecificOutput = @{
+                    hookEventName = "PreToolUse"
+                    permissionDecision = "deny"
+                    permissionDecisionReason = $reason
+                }
+            }
+            Write-Output ($result | ConvertTo-Json -Compress -Depth 5)
+            exit 0
+        }
+    }
+}
+
+Write-Output '{}'
+exit 0
