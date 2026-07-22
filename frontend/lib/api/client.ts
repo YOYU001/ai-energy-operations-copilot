@@ -1,9 +1,27 @@
 import "server-only";
 
-import type { DatasetSummary, HealthResponse, VersionResponse } from "./types";
+import type {
+  ColumnStatistics,
+  DatasetSummary,
+  DatasetSummaryStatistics,
+  HealthResponse,
+  TimeseriesPage,
+  TimeseriesRow,
+  VersionResponse,
+} from "./types";
 
 const API_BASE_URL = process.env.API_BASE_URL ?? "http://localhost:8000";
 const REQUEST_TIMEOUT_MS = 5000;
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 async function apiFetch(path: string): Promise<unknown> {
   const url = `${API_BASE_URL}${path}`;
@@ -26,7 +44,10 @@ async function apiFetch(path: string): Promise<unknown> {
   }
 
   if (!res.ok) {
-    throw new Error(`API request failed: ${path} returned HTTP ${res.status}`);
+    throw new ApiError(
+      `API request failed: ${path} returned HTTP ${res.status}`,
+      res.status,
+    );
   }
 
   try {
@@ -77,7 +98,11 @@ function isNullableString(value: unknown): value is string | null {
 }
 
 function isNullableNumber(value: unknown): value is number | null {
-  return value === null || typeof value === "number";
+  return value === null || Number.isFinite(value);
+}
+
+function isNullableBoolean(value: unknown): value is boolean | null {
+  return value === null || typeof value === "boolean";
 }
 
 function isDatasetSummary(data: unknown): data is DatasetSummary {
@@ -100,6 +125,122 @@ export async function getDatasets(): Promise<DatasetSummary[]> {
   if (!Array.isArray(data) || !data.every(isDatasetSummary)) {
     throw new Error(
       "API response schema mismatch: /datasets did not return DatasetSummary[]",
+    );
+  }
+  return data;
+}
+
+export async function getDataset(datasetId: number): Promise<DatasetSummary> {
+  const data = await apiFetch(`/datasets/${datasetId}`);
+  if (!isDatasetSummary(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId} did not return DatasetSummary`,
+    );
+  }
+  return data;
+}
+
+function isColumnStatistics(value: unknown): value is ColumnStatistics {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    isNullableNumber(v.min) && isNullableNumber(v.mean) && isNullableNumber(v.max)
+  );
+}
+
+function isColumnStatisticsRecord(
+  value: unknown,
+): value is Record<string, ColumnStatistics> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  return Object.values(value as Record<string, unknown>).every(
+    isColumnStatistics,
+  );
+}
+
+function isDatasetSummaryStatistics(
+  data: unknown,
+): data is DatasetSummaryStatistics {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.dataset_id === "number" &&
+    typeof d.row_count === "number" &&
+    typeof d.site_count === "number" &&
+    isNullableString(d.start_time) &&
+    isNullableString(d.end_time) &&
+    isColumnStatisticsRecord(d.columns)
+  );
+}
+
+export async function getDatasetSummary(
+  datasetId: number,
+): Promise<DatasetSummaryStatistics> {
+  const data = await apiFetch(`/datasets/${datasetId}/summary`);
+  if (!isDatasetSummaryStatistics(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/summary did not return DatasetSummaryStatistics`,
+    );
+  }
+  return data;
+}
+
+function isTimeseriesRow(data: unknown): data is TimeseriesRow {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.id === "number" &&
+    typeof d.dataset_id === "number" &&
+    isNullableString(d.timestamp) &&
+    isNullableString(d.site_id) &&
+    isNullableNumber(d.pv_forecast_kw) &&
+    isNullableNumber(d.pv_actual_kw) &&
+    isNullableNumber(d.load_kw) &&
+    isNullableNumber(d.load_forecast_kw) &&
+    isNullableNumber(d.battery_soc) &&
+    isNullableNumber(d.battery_power_kw) &&
+    isNullableNumber(d.battery_temperature) &&
+    isNullableNumber(d.electricity_price) &&
+    isNullableNumber(d.contract_capacity_kw) &&
+    isNullableNumber(d.grid_import_kw) &&
+    isNullableNumber(d.grid_export_kw) &&
+    isNullableString(d.weather_condition) &&
+    isNullableNumber(d.ghi) &&
+    isNullableNumber(d.temperature) &&
+    isNullableNumber(d.humidity) &&
+    isNullableString(d.ems_mode) &&
+    isNullableString(d.equipment_status) &&
+    isNullableNumber(d.battery_soh) &&
+    isNullableNumber(d.battery_cycle_count) &&
+    isNullableNumber(d.battery_equivalent_cycle) &&
+    isNullableString(d.battery_health_status) &&
+    isNullableBoolean(d.battery_is_second_life) &&
+    isNullableNumber(d.battery_rated_capacity_kwh) &&
+    isNullableNumber(d.battery_available_capacity_kwh)
+  );
+}
+
+function isTimeseriesPage(data: unknown): data is TimeseriesPage {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.dataset_id === "number" &&
+    typeof d.total === "number" &&
+    typeof d.limit === "number" &&
+    typeof d.offset === "number" &&
+    Array.isArray(d.items) &&
+    d.items.every(isTimeseriesRow)
+  );
+}
+
+export async function getDatasetTimeseries(
+  datasetId: number,
+): Promise<TimeseriesPage> {
+  const data = await apiFetch(`/datasets/${datasetId}/timeseries?limit=1000`);
+  if (!isTimeseriesPage(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/timeseries did not return TimeseriesPage`,
     );
   }
   return data;
