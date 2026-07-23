@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* `data-theme` on <html> (set by the blocking init script in layout.tsx,
+   updated by ThemeToggle) is the single source of truth for both the CSS
+   variables below and every existing `dark:` Tailwind utility class in the
+   app -- this makes the whole existing dark: styling manually toggleable
+   without having to touch each component. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -12,11 +19,9 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root[data-theme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
 }
 
 body {

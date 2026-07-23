@@ -21,6 +21,18 @@ export const metadata: Metadata = {
     "Energy operations dashboard, knowledge base, and AI copilot for solar PV, EMS, and battery scheduling.",
 };
 
+const THEME_INIT_SCRIPT = `
+(function () {
+  try {
+    var stored = localStorage.getItem("theme");
+    var theme = stored === "light" || stored === "dark"
+      ? stored
+      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = theme;
+  } catch (e) {}
+})();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -31,6 +43,9 @@ export default function RootLayout({
       lang="zh-Hant"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body className="h-full">
         <AppShell sidebar={<Sidebar />} topNav={<TopNav />}>
           {children}
