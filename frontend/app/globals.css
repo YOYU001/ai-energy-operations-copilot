@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+/* `data-theme` on <html> (set by the blocking init script in layout.tsx,
+   updated live by that same script on OS preference change, and updated by
+   ThemeToggle) is the source of truth for both the CSS variables below and
+   every existing `dark:` Tailwind utility class in the app. The
+   `:not([data-theme])` media-query block below is a CSS-only fallback for
+   the moment before the init script runs (or if it fails) -- it only
+   affects the two variables, not `dark:` classes, since JS is required for
+   the rest of this app anyway. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -13,10 +23,15 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --background: #0a0a0a;
     --foreground: #ededed;
   }
+}
+
+:root[data-theme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
 }
 
 body {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import IconButton from "@/components/ui/IconButton";
 
 export default function AppShell({
   sidebar,
@@ -49,15 +50,14 @@ export default function AppShell({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center">
-          <button
-            type="button"
+          <IconButton
             aria-label={open ? "關閉導覽選單" : "開啟導覽選單"}
             aria-expanded={open}
             onClick={() => setOpen((value) => !value)}
-            className="m-2 rounded-md p-2 hover:bg-foreground/10 md:hidden"
+            className="m-2 md:hidden"
           >
             <span aria-hidden="true">☰</span>
-          </button>
+          </IconButton>
           <div className="min-w-0 flex-1">{topNav}</div>
         </div>
         <main className="flex-1 overflow-y-auto">{children}</main>
