@@ -33,9 +33,30 @@ if ([string]::IsNullOrWhiteSpace($cmd)) {
     exit 0
 }
 
+# Heredoc bodies (e.g. `git commit -m "$(cat <<'EOF' ... EOF)"`) are inert
+# text data, never executed -- but the word "python" legitimately shows up
+# in prose there (e.g. a commit message describing a CodeQL language list).
+# Strip heredoc bodies before matching so that doesn't false-positive; this
+# never hides a real invocation, since the invoking token (if any) appears
+# before the `<<`, outside the stripped body.
+$cmdForMatching = [regex]::Replace($cmd, "(?s)<<-?\s*[`'`"]?(\w+)[`'`"]?.*?\r?\n\s*\1\b", "")
+
+# Same idea for known flags whose value is always inert prose, never
+# executed, on the specific tools this project actually uses (git, gh) --
+# e.g. `gh pr create --title "...python..."` describing what a fix does.
+# This is a maintained allowlist, not a general solution: a flag/tool not
+# listed here that happens to mention "python" in a plain quoted argument
+# (not a heredoc) will still false-positive. Add to this list as new cases
+# are found rather than trying to fully parse shell syntax -- knowing
+# whether an arbitrary command's argument is data or executable requires
+# understanding that command's semantics, which a regex cannot do in general.
+$dataFlagPattern = "(?:-m|-F|--title|--body|--body-file)\s+(?:`"(?:[^`"\\]|\\.)*`"|'(?:[^'\\]|\\.)*')"
+$cmdForMatching = [regex]::Replace($cmdForMatching, $dataFlagPattern, "")
+$cmdForMatching = [regex]::Replace($cmdForMatching, "-f\s+body=(?:`"(?:[^`"\\]|\\.)*`"|'(?:[^'\\]|\\.)*')", "")
+
 # Only care about commands that actually invoke a "python"/"python3" binary,
 # not e.g. a filename that happens to contain "python" as a substring.
-$invokesPython = $cmd -match '(^|[^A-Za-z0-9_])python3?([^A-Za-z0-9_]|$)'
+$invokesPython = $cmdForMatching -match '(^|[^A-Za-z0-9_])python3?([^A-Za-z0-9_]|$)'
 
 if ($invokesPython) {
     # Harmless, environment-independent invocations are exempt.
