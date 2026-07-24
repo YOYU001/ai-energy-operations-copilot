@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  frontend:
+    name: Frontend (lint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    # A handful of backend/tests/ don't override the DB dependency and rely
+    # on FastAPI rejecting invalid params before the route ever reaches it
+    # -- discovered while setting up this workflow that this assumption
+    # doesn't hold, and those tests genuinely try to connect. Locally this
+    # goes unnoticed because a real Postgres from `docker compose up -d`
+    # happens to already be running; CI has no such thing lying around, so
+    # give it the same real (but freshly-schema'd, empty) database instead
+    # of trying to relitigate which tests "should" need one.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      # Pinned to match requirements.txt -- keep these versions in sync by
+      # hand when requirements.txt changes. Deliberately NOT `pip install -r
+      # requirements.txt`: that file also pulls in torch/easyocr for the
+      # spike/ RAG prototype, which backend/app/ never imports and would
+      # slow every CI run down for no reason. If spike/tests/ ever needs to
+      # run in CI, install from requirements.txt directly instead.
+      - run: |
+          pip install fastapi==0.139.0 "uvicorn[standard]==0.51.0" sqlalchemy==2.0.51 \
+            psycopg2-binary==2.9.12 pandas==3.0.3 python-multipart==0.0.32 \
+            pytest==9.1.1 httpx2==2.5.0
+      - name: Apply database schema
+        run: PGPASSWORD=ci psql -h localhost -U ci -d ci -f database/schema.sql
+      - run: pytest backend/tests/
