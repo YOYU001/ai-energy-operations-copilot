@@ -5,7 +5,7 @@ psycopg2-binary==2.9.12
 pandas==3.0.5
 python-multipart==0.0.32
 pytest==9.1.1
-httpx2==2.5.0
+httpx2==2.9.0
 
 # RAG spike (Step 6 Sub-step 2): PDF parsing + OCR
 # --extra-index-url below is required for the torch==2.13.0+cpu line to
