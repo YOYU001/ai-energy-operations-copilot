@@ -18,4 +18,4 @@ torch==2.13.0+cpu
 easyocr==1.7.2
 
 # RAG spike (Step 6 Sub-step 4): embedding provider
-openai==2.45.0
+openai==2.48.0
