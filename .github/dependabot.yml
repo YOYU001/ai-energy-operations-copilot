@@ -17,6 +17,12 @@ updates:
       # `npm run lint` outright. Remove this once that issue closes.
       - dependency-name: "typescript"
         versions: [">=6.1.0"]
+      # eslint-plugin-react (pulled in via eslint-config-next) breaks under
+      # ESLint 10 -- it calls the removed `context.getFilename()` compat
+      # shim. Remove this once eslint-config-next/eslint-plugin-react ship
+      # ESLint 10 support.
+      - dependency-name: "eslint"
+        versions: [">=10.0.0"]
   - package-ecosystem: pip
     directory: /
     schedule:
