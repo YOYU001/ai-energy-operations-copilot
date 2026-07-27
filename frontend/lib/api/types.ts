@@ -70,3 +70,51 @@ export interface TimeseriesPage {
   offset: number;
   items: TimeseriesRow[];
 }
+
+export interface PriceThresholdInfo {
+  mode: string;
+  threshold: number | null;
+  non_null_sample_count: number;
+  distinct_price_count: number;
+  reason: string | null;
+}
+
+export interface BatteryDischargeEvidence {
+  electricity_price: number | null;
+  high_price_threshold: number | null;
+  price_threshold_mode: string;
+  grid_import_kw: number | null;
+  contract_capacity_kw: number | null;
+  contract_capacity_ratio: number | null;
+  battery_soc: number | null;
+  battery_power_kw: number | null;
+  non_null_price_sample_count: number;
+  distinct_price_count: number;
+}
+
+export interface AnomalyResult {
+  anomaly_type: string;
+  severity: string;
+  timestamp: string | null;
+  evidence: BatteryDischargeEvidence;
+  suggested_actions: string[];
+}
+
+export interface BatteryDischargeAnalysisResult {
+  rule: string;
+  rule_version: string;
+  price_threshold: PriceThresholdInfo;
+  input_row_count: number;
+  evaluated_row_count: number;
+  flagged_row_count: number;
+  anomalies: AnomalyResult[];
+}
+
+export interface AnalysisRunResponse {
+  analysis_run_id: number;
+  dataset_id: number;
+  analysis_type: string;
+  rule_version: string;
+  created_at: string;
+  result: BatteryDischargeAnalysisResult;
+}

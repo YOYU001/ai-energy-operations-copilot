@@ -4,7 +4,7 @@
 打造 **AI Energy Operations Copilot MVP v1**，作為 NVIDIA 面試作品集與 AI 工程能力展示專案。
 
 ## Current Phase
-Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ **Step 7：Frontend Foundation — 驗收通過（完成）**，段落 A–F 全部完成，`npm run lint`／`npm run build` 通過。Step 10（Knowledge Base / RAG production integration）已完整規劃（schema gap analysis、migration order、rollback plan — docs/RAG_SPIKE_PLAN.md §17）但尚未執行；roadmap 順序維持不變（docs/PROJECT_ALIGNMENT_REVIEW.md §9）。下一步：**Step 8：Dashboard Charts**（聚焦 BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT 場景相關圖表，尚未開始）。
+Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → **Step 9：Rule-Based Anomaly Diagnosis — 驗收通過（完成）**，`BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT` 規則、GET/POST analysis API、`/analysis` 與 `/analysis/[id]` 頁面、Server Action 執行流程均已驗證。Step 10（Knowledge Base / RAG production integration）已完整規劃（schema gap analysis、migration order、rollback plan — docs/RAG_SPIKE_PLAN.md §17）但尚未執行；roadmap 順序維持不變（docs/PROJECT_ALIGNMENT_REVIEW.md §9）。下一步：**Step 10：Knowledge Base / RAG（正式版）**（尚未開始）。
 
 ## Completed
 - 定義 MVP v1 產品範圍、技術棧、Internal Knowledge Only 原則、初版 data schema，以及 Claude Code learning-by-building / 漸進式開發流程。
@@ -32,6 +32,8 @@ Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Documen
 - 透過 `.mcp.json` + `.claude/settings.local.json` 的 `enabledMcpjsonServers` 連接 Context7 MCP（`@upstash/context7-mcp`），依使用者決定採用 project-scoped（而非帳號層級）的長期連線，安裝前已用 WebSearch 驗證過套件來源。已在全新 session 中端對端驗證：正確回傳目前最新的 FastAPI `Depends`/`Annotated` 用法，並將答案連結回 `backend/app/db.py` 實際的 dependency-injection 用法。
 - 新增 `trend-scout` subagent（`.claude/agents/trend-scout.md`，sonnet，僅限 WebSearch/WebFetch）與對應的 `/trend-scout` command skill —— 與 `research`（針對特定任務查資料）角色不同：trend-scout 會主動從不限來源的公開資訊調查業界做法（chunking、OCR、RAG、agent 設計），對來源可信度分級，且不會直接建議立即採用。已端對端驗證：一次真實的 chunking 策略趨勢查詢，正確區分出可信的 arXiv 來源與可信度較低的 SEO 部落格，並將結論連結回 `docs/RAG_SPIKE_PLAN.md` 既有的 `structured_600_100` 決策，判斷目前尚無需變更。
 - Step 7 — Frontend Foundation：驗收通過。Next.js 骨架、Overview／Datasets 真實串接 FastAPI，lint/build 通過。Details: docs/STEP7_FRONTEND_PLAN.md §11。
+- Step 8 — Dashboard Charts：驗收通過。新增 `datasets/[id]` 詳細圖表頁（5 組圖表）並修正孤立資料點顯示問題，各項邊界狀態（多場域、空資料、截斷、契約容量、全 null 等）均驗證通過。`error.tsx` 重試按鈕改用 Next.js 16.2 `unstable_retry()` 修正真正重新 fetch 的問題。lint/build/tsc 皆通過。
+- Step 9 — Rule-Based Anomaly Diagnosis：驗收通過。新增 `rule_engine.py`（`BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT`）、冪等的 `GET`/`POST /datasets/{id}/analysis`、`/analysis` 與 `/analysis/[id]` 頁面。29 個新測試，全專案 142 個測試通過。
 
 ## Important Decisions
 - Frontend：Next.js
@@ -68,10 +70,17 @@ MVP v1 應涵蓋：
 
 ## Current Known Issues
 - Frontend 手機寬度的 responsive 行為（Sidebar 收合）尚未以真實窄 viewport 截圖完成視覺驗證；已用程式碼審查確認 `md:` breakpoint 與 toggle 邏輯正確，列為非阻擋性限制。
+- `datasets/[id]` 巢狀 `not-found.tsx` 畫面內容正確，但實際 HTTP status 仍是 200（已用 curl 確認），非阻擋性。
+- Dashboard 圖表：契約容量（contract_capacity_kw）為 0 時，參考線會與 X 軸座標軸重疊，視覺上不易辨識；屬非阻擋性小瑕疵。
+- Electricity Price 圖表單位尚未由文件確認。
 - 開發階段的 `error.tsx` 畫面仍可能直接顯示完整 backend URL 與底層錯誤訊息（例如 `Failed to reach backend at http://localhost:8000/...`）；正式環境前需要評估是否要遮蔽內部網址與錯誤細節。
 - 範例 CSV dataset 尚未建立。
 - RAG ingestion pipeline 尚未實作。
-- Rule-based 分析邏輯尚未實作。
+- Step 9 目前只實作 `BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT` 這一條 anomaly rule，其餘 7 種異常類型延後至未來版本。
+- `analysis_runs` 的 `severity` 暫固定為 `"warning"`，尚無 critical 分級。
+- `analysis/[id]` 巢狀 `not-found.tsx` 畫面內容正確，但實際 HTTP status 仍是 200（同 `datasets/[id]` 已知限制）。
+- `MAX_ANALYSIS_ROWS = 50_000` 是 MVP 安全上限，非業務規則；未來大量資料需改成 streaming 或 SQL aggregation。
+- Analysis POST 的併發競爭（`ON CONFLICT DO NOTHING` + 重新 SELECT）已用 DB 層驗證邏輯正確，但尚未做真正的高併發壓力測試。
 - 尚無 ORM model。
 - 尚無 Alembic migration。
 - 需要保持 Docker Desktop 執行中，資料庫相關 endpoint 才能運作。
@@ -85,7 +94,7 @@ MVP v1 應涵蓋：
 - 詳細風險與盲點（幻覺、citation 準確性、OCR 品質、confidence 門檻、成本等）已記錄於 `docs/PROJECT_ALIGNMENT_REVIEW.md` 第 6 節，此處不重複列出。
 
 ## Next Step
-**Step 8：Dashboard Charts**（docs/PROJECT_ALIGNMENT_REVIEW.md §9，原 Step 7）—— 聚焦 `BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT` 場景相關圖表。**尚未開始規劃或實作。** 下一步動作：比照 Step 7 的流程，先完成 Step 8 的教學與 implementation plan，經確認後再開始實作。依使用者決定，原始 roadmap 順序（docs/PROJECT_ALIGNMENT_REVIEW.md §9）維持不變：Step 10（RAG production integration）維持原訂排程，不提前。Step 6 剩餘的已知限制（q15 retrieval 盲點、q20 跨 chunk 失敗、doc4 有 5 個表格在句尾標點處被截斷、`is_active` 的保留／清理政策、q03/q04/q05 的 ground truth、`multi_chunk_coverage_threshold` 調整）已記錄於 docs/RAG_SPIKE_PLAN.md §18，列為可接受、非阻塞、延後至 Step 10 實際執行時再處理。
+**Step 10：Knowledge Base / RAG（正式版）**（docs/PROJECT_ALIGNMENT_REVIEW.md §9、docs/DEVELOPMENT_WORKFLOW.md 第 6 節）。**尚未開始規劃或實作。** 基於 Step 6 RAG Feasibility Spike 的結論展開；schema gap analysis、migration order、reuse/refactor list、rollback plan 已於 docs/RAG_SPIKE_PLAN.md §17 完整規劃，尚未執行。下一步動作：比照 Step 7/8/9 的流程，先完成 Step 10 的教學與 implementation plan，經確認後再開始實作。Step 6 剩餘的已知限制（q15 retrieval 盲點、q20 跨 chunk 失敗、doc4 有 5 個表格在句尾標點處被截斷、`is_active` 的保留／清理政策、q03/q04/q05 的 ground truth、`multi_chunk_coverage_threshold` 調整）已記錄於 docs/RAG_SPIKE_PLAN.md §18，列為可接受、非阻塞、於 Step 10 實際執行時再處理。
 
 ## Files To Read Next Time
 每次一定要先讀：

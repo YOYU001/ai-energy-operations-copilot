@@ -31,6 +31,8 @@ class FakeConnection:
         self._rows = rows if rows is not None else []
         self._responses = list(responses) if responses is not None else None
         self.executed = []
+        self.committed = False
+        self.rolled_back = False
 
     def execute(self, statement, params=None):
         self.executed.append((statement, params))
@@ -39,3 +41,9 @@ class FakeConnection:
         else:
             rows = self._rows
         return FakeResult(rows)
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True

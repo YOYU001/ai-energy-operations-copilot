@@ -1,10 +1,15 @@
 import "server-only";
 
 import type {
+  AnalysisRunResponse,
+  AnomalyResult,
+  BatteryDischargeAnalysisResult,
+  BatteryDischargeEvidence,
   ColumnStatistics,
   DatasetSummary,
   DatasetSummaryStatistics,
   HealthResponse,
+  PriceThresholdInfo,
   TimeseriesPage,
   TimeseriesRow,
   VersionResponse,
@@ -23,7 +28,7 @@ export class ApiError extends Error {
   }
 }
 
-async function apiFetch(path: string): Promise<unknown> {
+async function apiFetch(path: string, init: RequestInit = {}): Promise<unknown> {
   const url = `${API_BASE_URL}${path}`;
 
   let res: Response;
@@ -31,6 +36,7 @@ async function apiFetch(path: string): Promise<unknown> {
     res = await fetch(url, {
       cache: "no-store",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      ...init,
     });
   } catch (cause) {
     if (cause instanceof Error && cause.name === "TimeoutError") {
@@ -241,6 +247,106 @@ export async function getDatasetTimeseries(
   if (!isTimeseriesPage(data)) {
     throw new Error(
       `API response schema mismatch: /datasets/${datasetId}/timeseries did not return TimeseriesPage`,
+    );
+  }
+  return data;
+}
+
+function isPriceThresholdInfo(value: unknown): value is PriceThresholdInfo {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.mode === "string" &&
+    isNullableNumber(v.threshold) &&
+    typeof v.non_null_sample_count === "number" &&
+    typeof v.distinct_price_count === "number" &&
+    isNullableString(v.reason)
+  );
+}
+
+function isBatteryDischargeEvidence(
+  value: unknown,
+): value is BatteryDischargeEvidence {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    isNullableNumber(v.electricity_price) &&
+    isNullableNumber(v.high_price_threshold) &&
+    typeof v.price_threshold_mode === "string" &&
+    isNullableNumber(v.grid_import_kw) &&
+    isNullableNumber(v.contract_capacity_kw) &&
+    isNullableNumber(v.contract_capacity_ratio) &&
+    isNullableNumber(v.battery_soc) &&
+    isNullableNumber(v.battery_power_kw) &&
+    typeof v.non_null_price_sample_count === "number" &&
+    typeof v.distinct_price_count === "number"
+  );
+}
+
+function isAnomalyResult(value: unknown): value is AnomalyResult {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.anomaly_type === "string" &&
+    typeof v.severity === "string" &&
+    isNullableString(v.timestamp) &&
+    isBatteryDischargeEvidence(v.evidence) &&
+    Array.isArray(v.suggested_actions) &&
+    v.suggested_actions.every((action) => typeof action === "string")
+  );
+}
+
+function isBatteryDischargeAnalysisResult(
+  value: unknown,
+): value is BatteryDischargeAnalysisResult {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.rule === "string" &&
+    typeof v.rule_version === "string" &&
+    isPriceThresholdInfo(v.price_threshold) &&
+    typeof v.input_row_count === "number" &&
+    typeof v.evaluated_row_count === "number" &&
+    typeof v.flagged_row_count === "number" &&
+    Array.isArray(v.anomalies) &&
+    v.anomalies.every(isAnomalyResult)
+  );
+}
+
+function isAnalysisRunResponse(value: unknown): value is AnalysisRunResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.analysis_run_id === "number" &&
+    typeof v.dataset_id === "number" &&
+    typeof v.analysis_type === "string" &&
+    typeof v.rule_version === "string" &&
+    typeof v.created_at === "string" &&
+    isBatteryDischargeAnalysisResult(v.result)
+  );
+}
+
+export async function getDatasetAnalysis(
+  datasetId: number,
+): Promise<AnalysisRunResponse> {
+  const data = await apiFetch(`/datasets/${datasetId}/analysis`);
+  if (!isAnalysisRunResponse(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/analysis did not return AnalysisRunResponse`,
+    );
+  }
+  return data;
+}
+
+export async function postDatasetAnalysis(
+  datasetId: number,
+): Promise<AnalysisRunResponse> {
+  const data = await apiFetch(`/datasets/${datasetId}/analysis`, {
+    method: "POST",
+  });
+  if (!isAnalysisRunResponse(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/analysis (POST) did not return AnalysisRunResponse`,
     );
   }
   return data;

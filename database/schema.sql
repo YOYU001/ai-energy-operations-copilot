@@ -87,8 +87,10 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
     id SERIAL PRIMARY KEY,
     dataset_id INTEGER REFERENCES datasets(id),
     analysis_type TEXT,
+    rule_version TEXT,
     result_json JSONB,
-    created_at TIMESTAMP
+    created_at TIMESTAMP,
+    UNIQUE (dataset_id, analysis_type, rule_version)
 );
 
 CREATE TABLE IF NOT EXISTS chat_messages (
