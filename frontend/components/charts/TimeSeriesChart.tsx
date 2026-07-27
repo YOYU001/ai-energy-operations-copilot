@@ -10,6 +10,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
+  type DotItemDotProps,
 } from "recharts";
 
 export interface TimeSeriesDatum {
@@ -58,6 +59,20 @@ function isValidNumber(value: unknown): value is number {
 
 function seriesHasValidData(data: TimeSeriesDatum[], dataKey: string): boolean {
   return data.some((point) => isValidNumber(point[dataKey]));
+}
+
+// connectNulls is false, so Recharts only draws a segment between two consecutive
+// valid points. A valid point with no valid neighbor on either side never gets a
+// segment endpoint, so it would otherwise be invisible — render it as a small dot.
+function findIsolatedIndices(data: TimeSeriesDatum[], dataKey: string): Set<number> {
+  const isolated = new Set<number>();
+  for (let i = 0; i < data.length; i++) {
+    if (!isValidNumber(data[i][dataKey])) continue;
+    const prevValid = i > 0 && isValidNumber(data[i - 1][dataKey]);
+    const nextValid = i < data.length - 1 && isValidNumber(data[i + 1][dataKey]);
+    if (!prevValid && !nextValid) isolated.add(i);
+  }
+  return isolated;
 }
 
 function summarizeSeries(data: TimeSeriesDatum[], s: TimeSeriesSeries): string {
@@ -128,18 +143,35 @@ export default function TimeSeriesChart({
             }}
           />
           {availableSeries.length > 1 && <Legend />}
-          {availableSeries.map((s) => (
-            <Line
-              key={s.dataKey}
-              type="monotone"
-              dataKey={s.dataKey}
-              name={s.label}
-              stroke={s.color}
-              strokeWidth={2}
-              dot={false}
-              connectNulls={false}
-            />
-          ))}
+          {availableSeries.map((s) => {
+            const isolatedIndices = findIsolatedIndices(data, s.dataKey);
+            const renderDot = (props: DotItemDotProps) => {
+              if (!isolatedIndices.has(props.index)) return null;
+              return (
+                <circle
+                  key={`isolated-dot-${s.dataKey}-${props.index}`}
+                  cx={props.cx}
+                  cy={props.cy}
+                  r={3}
+                  fill={s.color}
+                  stroke="none"
+                />
+              );
+            };
+            return (
+              <Line
+                key={s.dataKey}
+                type="monotone"
+                dataKey={s.dataKey}
+                name={s.label}
+                stroke={s.color}
+                strokeWidth={2}
+                dot={renderDot}
+                connectNulls={false}
+                isAnimationActive={false}
+              />
+            );
+          })}
           {referenceLines.map((ref) => (
             <ReferenceLine
               key={`${ref.label}-${ref.value}`}
