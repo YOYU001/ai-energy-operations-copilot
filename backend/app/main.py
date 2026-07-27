@@ -5,16 +5,36 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFi
 from sqlalchemy import text
 
 from app.datasets_queries import (
+    get_analysis_run,
     get_dataset_by_id,
     get_dataset_summary,
     get_dataset_timeseries,
+    get_dataset_timeseries_for_analysis,
+    insert_analysis_run,
     list_datasets,
 )
 from app.db import get_connection, get_db_dependency
 from app.ingestion import ALL_ENERGY_TIMESERIES_COLUMNS, IngestionError, parse_and_validate_csv
-from app.schemas import DatasetSummary, DatasetSummaryStatistics, IngestResult, TimeseriesPage
+from app.schemas import (
+    AnalysisRunResponse,
+    BatteryDischargeAnalysisResult,
+    DatasetSummary,
+    DatasetSummaryStatistics,
+    IngestResult,
+    TimeseriesPage,
+)
+from app.services.rule_engine import (
+    ANALYSIS_TYPE,
+    RULE_VERSION,
+    evaluate_battery_should_discharge_but_did_not,
+)
 
 app = FastAPI()
+
+# fail-closed safety cap for rule-engine analysis; not a business rule, just an
+# MVP-scale guard against computing a percentile/anomaly scan over an unbounded
+# unpaginated query (see get_dataset_timeseries_for_analysis)
+MAX_ANALYSIS_ROWS = 50_000
 
 
 @app.get("/health")
@@ -69,6 +89,69 @@ def get_dataset_timeseries_endpoint(
         raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
     total, rows = get_dataset_timeseries(conn, dataset_id, limit, offset)
     return {"dataset_id": dataset_id, "total": total, "limit": limit, "offset": offset, "items": rows}
+
+
+def _analysis_run_to_response(run: dict) -> AnalysisRunResponse:
+    return AnalysisRunResponse(
+        analysis_run_id=run["id"],
+        dataset_id=run["dataset_id"],
+        analysis_type=run["analysis_type"],
+        rule_version=run["rule_version"],
+        created_at=run["created_at"],
+        result=BatteryDischargeAnalysisResult.model_validate(run["result_json"]),
+    )
+
+
+@app.get("/datasets/{dataset_id}/analysis", response_model=AnalysisRunResponse)
+def get_dataset_analysis(dataset_id: int, conn=Depends(get_db_dependency)):
+    if get_dataset_by_id(conn, dataset_id) is None:
+        raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
+
+    run = get_analysis_run(conn, dataset_id, ANALYSIS_TYPE, RULE_VERSION)
+    if run is None:
+        raise HTTPException(status_code=404, detail="no analysis run yet for this dataset")
+    return _analysis_run_to_response(run)
+
+
+@app.post("/datasets/{dataset_id}/analysis", response_model=AnalysisRunResponse)
+def post_dataset_analysis(dataset_id: int, conn=Depends(get_db_dependency)):
+    dataset = get_dataset_by_id(conn, dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
+
+    existing = get_analysis_run(conn, dataset_id, ANALYSIS_TYPE, RULE_VERSION)
+    if existing is not None:
+        return _analysis_run_to_response(existing)
+
+    if dataset["row_count"] is not None and dataset["row_count"] > MAX_ANALYSIS_ROWS:
+        raise HTTPException(
+            status_code=422,
+            detail="Dataset contains too many rows for the current MVP analysis limit.",
+        )
+
+    rows = get_dataset_timeseries_for_analysis(conn, dataset_id)
+    result = evaluate_battery_should_discharge_but_did_not(rows)
+
+    try:
+        inserted = insert_analysis_run(
+            conn,
+            dataset_id=dataset_id,
+            analysis_type=ANALYSIS_TYPE,
+            rule_version=RULE_VERSION,
+            result_json=result.model_dump_json(),
+            created_at=datetime.now(timezone.utc),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    if inserted is None:
+        # a concurrent request won the ON CONFLICT DO NOTHING race and inserted
+        # first; re-read its row so both requests return the same result
+        inserted = get_analysis_run(conn, dataset_id, ANALYSIS_TYPE, RULE_VERSION)
+
+    return _analysis_run_to_response(inserted)
 
 
 @app.post("/datasets/upload", response_model=IngestResult)

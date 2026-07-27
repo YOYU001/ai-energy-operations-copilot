@@ -1,0 +1,37 @@
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      # Patch/minor bumps are covered by semver's own backwards-compatibility
+      # promise, and this repo's required status checks (lint/build/pytest/
+      # CodeQL) already gate correctness. Major bumps are NOT auto-merged --
+      # semver allows breaking changes there, and CI passing doesn't prove a
+      # major bump is safe (see PRs #19/#28: CI failure was the *only* signal
+      # for those, but some breakages don't fail CI at all and only show up
+      # as a changelog-documented behavior change). Those still need a human/
+      # Claude to read the changelog and decide.
+      - name: Enable auto-merge for patch/minor
+        if: |
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: "${{ github.event.pull_request.html_url }}"
+          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
