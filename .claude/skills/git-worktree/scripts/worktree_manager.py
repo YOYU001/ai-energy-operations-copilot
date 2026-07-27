@@ -331,15 +331,22 @@ def cmd_pr_reply(comment_id: str, body: str) -> int:
 
 
 def cmd_pr_merge(pr: str, strategy: str) -> int:
-    """Merge a PR and delete its branch. The calling agent must already have
-    the user's go-ahead to merge before running this -- this function does
-    not ask, it just executes."""
+    """Merge a PR. Does NOT delete the branch (local or remote) -- that's
+    `remove` + `review`/`delete-remote`'s job, run as separate follow-up
+    steps. Deliberately not using gh's `--delete-branch`: it tries to
+    delete the local branch too, which fails outright if a worktree still
+    has it checked out (the common case right after finishing work on it),
+    and it deletes the remote branch without going through this skill's
+    review-before-delete-remote safety check. The calling agent must
+    already have the user's go-ahead to merge before running this -- this
+    function does not ask, it just executes."""
     flag = "--squash" if strategy == "squash" else "--merge"
-    result = _gh(["pr", "merge", pr, flag, "--delete-branch"])
+    result = _gh(["pr", "merge", pr, flag])
     if result.returncode != 0:
         print(f"[git-worktree] FAILED to merge PR #{pr}:\n{result.stderr}")
         return 1
-    print(f"[git-worktree] SUCCESS -- PR #{pr} merged ({strategy}) and branch deleted.")
+    print(f"[git-worktree] SUCCESS -- PR #{pr} merged ({strategy}). "
+          f"Branch NOT deleted -- run `remove <branch>` then `review`/`delete-remote <branch>` next.")
     return 0
 
 
@@ -387,7 +394,8 @@ def main() -> int:
     pr_reply_parser.add_argument("body", help="Reply body.")
 
     pr_merge_parser = subparsers.add_parser(
-        "pr-merge", help="Merge a PR and delete its branch. Only run after the user has agreed to merge."
+        "pr-merge", help="Merge a PR (does not delete the branch -- use remove/delete-remote after). "
+                         "Only run after the user has agreed to merge."
     )
     pr_merge_parser.add_argument("pr", help="PR number.")
     pr_merge_parser.add_argument("--strategy", choices=["squash", "merge"], default="squash", help="Merge strategy (default: squash).")
