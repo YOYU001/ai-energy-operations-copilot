@@ -4,6 +4,19 @@ updates:
     directory: /frontend
     schedule:
       interval: weekly
+    groups:
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+    ignore:
+      # typescript-eslint's peer range is ">=4.8.4 <6.1.0" (see
+      # typescript-eslint/typescript-eslint#10940) -- TS 7.0 breaks
+      # `npm run lint` outright. Remove this once that issue closes.
+      - dependency-name: "typescript"
+        versions: [">=6.1.0"]
   - package-ecosystem: pip
     directory: /
     schedule:
