@@ -82,3 +82,51 @@ class TimeseriesPage(BaseModel):
     limit: int
     offset: int
     items: list[TimeseriesRow]
+
+
+class PriceThresholdInfo(BaseModel):
+    mode: str  # "insufficient_data" | "no_distinguishable_peak" | "discrete_tou_max" | "percentile"
+    threshold: Optional[float] = None
+    non_null_sample_count: int
+    distinct_price_count: int
+    reason: Optional[str] = None
+
+
+class BatteryDischargeEvidence(BaseModel):
+    electricity_price: Optional[float] = None
+    high_price_threshold: Optional[float] = None
+    price_threshold_mode: str
+    grid_import_kw: Optional[float] = None
+    contract_capacity_kw: Optional[float] = None
+    contract_capacity_ratio: Optional[float] = None
+    battery_soc: Optional[float] = None
+    battery_power_kw: Optional[float] = None
+    non_null_price_sample_count: int
+    distinct_price_count: int
+
+
+class AnomalyResult(BaseModel):
+    anomaly_type: str
+    severity: str
+    timestamp: Optional[datetime] = None
+    evidence: BatteryDischargeEvidence
+    suggested_actions: list[str]
+
+
+class BatteryDischargeAnalysisResult(BaseModel):
+    rule: str
+    rule_version: str
+    price_threshold: PriceThresholdInfo
+    input_row_count: int
+    evaluated_row_count: int
+    flagged_row_count: int
+    anomalies: list[AnomalyResult]
+
+
+class AnalysisRunResponse(BaseModel):
+    analysis_run_id: int
+    dataset_id: int
+    analysis_type: str
+    rule_version: str
+    created_at: datetime
+    result: BatteryDischargeAnalysisResult

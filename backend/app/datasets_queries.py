@@ -122,3 +122,74 @@ def get_dataset_timeseries(conn, dataset_id, limit, offset):
         {"dataset_id": dataset_id, "limit": limit, "offset": offset},
     ).mappings().all()
     return total, [dict(row) for row in rows]
+
+
+GET_TIMESERIES_FOR_ANALYSIS_SQL = text(
+    """
+    SELECT timestamp, electricity_price, grid_import_kw, contract_capacity_kw, battery_soc, battery_power_kw
+    FROM energy_timeseries
+    WHERE dataset_id = :dataset_id
+    ORDER BY timestamp ASC NULLS LAST, id ASC
+    """
+)
+
+
+def get_dataset_timeseries_for_analysis(conn, dataset_id):
+    """Return every rule-relevant column for one dataset's energy_timeseries rows, unpaginated.
+
+    Unlike get_dataset_timeseries (capped at 1000 rows for dashboard charts),
+    rule evaluation needs the full dataset: a partial view would compute a
+    wrong price threshold and silently miss anomalies past row 1000. Callers
+    must guard against oversized datasets themselves (see MAX_ANALYSIS_ROWS
+    in main.py) before calling this — there is no LIMIT here by design.
+    """
+    rows = conn.execute(GET_TIMESERIES_FOR_ANALYSIS_SQL, {"dataset_id": dataset_id}).mappings().all()
+    return [dict(row) for row in rows]
+
+
+GET_ANALYSIS_RUN_SQL = text(
+    """
+    SELECT id, dataset_id, analysis_type, rule_version, result_json, created_at
+    FROM analysis_runs
+    WHERE dataset_id = :dataset_id AND analysis_type = :analysis_type AND rule_version = :rule_version
+    """
+)
+
+
+def get_analysis_run(conn, dataset_id, analysis_type, rule_version):
+    """Return the stored analysis_runs row for this (dataset_id, analysis_type, rule_version), or None."""
+    row = conn.execute(
+        GET_ANALYSIS_RUN_SQL,
+        {"dataset_id": dataset_id, "analysis_type": analysis_type, "rule_version": rule_version},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+INSERT_ANALYSIS_RUN_SQL = text(
+    """
+    INSERT INTO analysis_runs (dataset_id, analysis_type, rule_version, result_json, created_at)
+    VALUES (:dataset_id, :analysis_type, :rule_version, CAST(:result_json AS JSONB), :created_at)
+    ON CONFLICT (dataset_id, analysis_type, rule_version) DO NOTHING
+    RETURNING id, dataset_id, analysis_type, rule_version, result_json, created_at
+    """
+)
+
+
+def insert_analysis_run(conn, dataset_id, analysis_type, rule_version, result_json, created_at):
+    """Insert one analysis_runs row; result_json must already be a JSON string.
+
+    Returns None if a concurrent request already inserted the same
+    (dataset_id, analysis_type, rule_version) first (ON CONFLICT DO NOTHING) —
+    the caller must re-SELECT via get_analysis_run in that case.
+    """
+    row = conn.execute(
+        INSERT_ANALYSIS_RUN_SQL,
+        {
+            "dataset_id": dataset_id,
+            "analysis_type": analysis_type,
+            "rule_version": rule_version,
+            "result_json": result_json,
+            "created_at": created_at,
+        },
+    ).mappings().first()
+    return dict(row) if row else None
