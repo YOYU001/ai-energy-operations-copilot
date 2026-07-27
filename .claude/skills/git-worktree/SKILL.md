@@ -71,11 +71,16 @@ description: 這個專案「用 GitHub 開發一個功能」的完整流程都�
 
 ## Dependabot PR 的審查方式
 
-`dependabot.yml` 本身沒有限制更新幅度——修補、次版本、主版本升級都會照樣自動開 PR，這是刻意的：**開 PR 這件事本身就是最直接的通知**，不需要另外蓋一套通知機制。差別在於你（Claude）審查這種 PR 的方式，要分兩種情境：
+`dependabot.yml` 本身沒有限制更新幅度——修補、次版本、主版本升級都會照樣自動開 PR，這是刻意的：**開 PR 這件事本身就是最直接的通知**，不需要另外蓋一套通知機制。
 
-1. **先判斷是不是主版本升級（major version）**：Dependabot 的 PR 標題通常會寫「Bump `<套件>` from `X.Y.Z` to `A.B.C`」，比較 `X` 跟 `A` 這兩個數字——不一樣就是主版本升級（例如 `1.x` → `2.x`）；`X` 相同、只有 `Y`/`Z` 變的，是次版本／修補版本。
-2. **修補／次版本**：照一般 PR 流程走就好（確認 CI 過、問使用者要不要 merge），不用額外深入調查，這種按 semver 慣例通常不會破壞相容性。
-3. **主版本升級**：**不要直接照一般流程處理**。先去查這個套件的 release notes／changelog（可以用 WebSearch/WebFetch，或看套件的 GitHub repo），整理出：這次升級大概動到什麼地方、有沒有已知的 breaking change、對這個專案目前的用法有沒有實際影響。整理完給使用者一個明確建議（現在適合升級 / 建議先觀望 / 有具體風險要注意），然後才問使用者要不要 merge——決定權還是在使用者，你只負責調查跟給建議，不能自己判斷「看起來沒問題」就直接處理掉。
+**修補／次版本（patch/minor）已經完全自動化，你不用管**：`.github/workflows/dependabot-auto-merge.yml`（2026-07-27 建立）會用 `dependabot/fetch-metadata` 判斷 update-type，只要是 `semver-patch`／`semver-minor` 就自動 `gh pr merge --auto --squash`，required checks 全過才會真的 merge。這些 PR 你不需要主動去看、也不用問使用者——CI 綠燈代表已經自動處理完了。
+
+**主版本升級（major version）維持人工流程，不會被自動化**：workflow 故意排除 major，因為 CI 全過不代表安全（見已發生案例：`typescript` 7.0/`eslint` 10 都是 CI 直接 fail 才抓到的，但也可能有 CI 測不到、只在 changelog 才寫明的行為變化）。遇到 major PR：
+
+1. **先判斷是不是主版本升級**：PR 標題通常寫「Bump `<套件>` from `X.Y.Z` to `A.B.C`」，比較 `X` 跟 `A`——不一樣就是主版本升級。
+2. 去查這個套件的 release notes／changelog（WebSearch/WebFetch，或看套件的 GitHub repo），整理出：這次升級大概動到什麼地方、有沒有已知的 breaking change、對這個專案目前的用法有沒有實際影響。
+3. 整理完給使用者一個明確建議（現在適合升級 / 建議先觀望 / 有具體風險要注意），然後才問使用者要不要 merge——決定權還是在使用者，你只負責調查跟給建議，不能自己判斷「看起來沒問題」就直接處理掉。
+4. **如果 major PR 的 CI 直接 fail，且原因是上游套件生態系還沒跟上**（例如 `typescript-eslint`／`eslint-plugin-react` 那種相容性問題）：在 `dependabot.yml` 幫該套件加一條 `ignore` 規則（連同一個說明「為什麼擋」跟「什麼情況該拿掉」的註解），避免同一個會壞的版本一直重複開 PR 打擾使用者。這個規則之後要記得回頭檢查上游是不是已經支援了。
 
 ## 已知限制 / 之後可以優化的地方（記錄用，先不動手）
 
