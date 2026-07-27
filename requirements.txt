@@ -1,11 +1,11 @@
-fastapi==0.139.0
+fastapi==0.139.2
 uvicorn[standard]==0.51.0
 sqlalchemy==2.0.51
 psycopg2-binary==2.9.12
-pandas==3.0.3
+pandas==3.0.5
 python-multipart==0.0.32
 pytest==9.1.1
-httpx2==2.5.0
+httpx2==2.9.0
 
 # RAG spike (Step 6 Sub-step 2): PDF parsing + OCR
 # --extra-index-url below is required for the torch==2.13.0+cpu line to
@@ -18,4 +18,4 @@ torch==2.13.0+cpu
 easyocr==1.7.2
 
 # RAG spike (Step 6 Sub-step 4): embedding provider
-openai==2.45.0
+openai==2.48.0
