@@ -56,16 +56,16 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      # Pinned to match requirements.txt -- keep these versions in sync by
-      # hand when requirements.txt changes. Deliberately NOT `pip install -r
-      # requirements.txt`: that file also pulls in torch/easyocr for the
-      # spike/ RAG prototype, which backend/app/ never imports and would
-      # slow every CI run down for no reason. If spike/tests/ ever needs to
-      # run in CI, install from requirements.txt directly instead.
+      # Install straight from requirements.txt (the single source of truth)
+      # instead of a hand-maintained version list -- that list drifted out
+      # of sync once Step 10 made backend/app/ itself import pymupdf/torch/
+      # easyocr/openai (previously only spike/ needed them), and CI started
+      # failing with ModuleNotFoundError: No module named 'fitz' as a
+      # result. requirements.txt already carries the --extra-index-url line
+      # torch's +cpu wheel needs, so pip picks it up automatically.
       - run: |
-          pip install fastapi==0.139.0 "uvicorn[standard]==0.51.0" sqlalchemy==2.0.51 \
-            psycopg2-binary==2.9.12 pandas==3.0.3 python-multipart==0.0.32 \
-            pytest==9.1.1 httpx2==2.5.0
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
       - name: Apply database schema
         run: PGPASSWORD=ci psql -h localhost -U ci -d ci -f database/schema.sql
       - run: pytest backend/tests/
