@@ -5,9 +5,12 @@ import type {
   AnomalyResult,
   BatteryDischargeAnalysisResult,
   BatteryDischargeEvidence,
+  ChunkSummary,
   ColumnStatistics,
   DatasetSummary,
   DatasetSummaryStatistics,
+  DocumentSummary,
+  DocumentUploadResult,
   HealthResponse,
   PriceThresholdInfo,
   TimeseriesPage,
@@ -347,6 +350,105 @@ export async function postDatasetAnalysis(
   if (!isAnalysisRunResponse(data)) {
     throw new Error(
       `API response schema mismatch: /datasets/${datasetId}/analysis (POST) did not return AnalysisRunResponse`,
+    );
+  }
+  return data;
+}
+
+function isDocumentSummary(data: unknown): data is DocumentSummary {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.id === "number" &&
+    isNullableString(d.title) &&
+    isNullableString(d.file_name) &&
+    isNullableString(d.file_type) &&
+    isNullableString(d.source_type) &&
+    isNullableString(d.uploaded_at) &&
+    typeof d.status === "string" &&
+    isNullableNumber(d.total_pages) &&
+    isNullableNumber(d.supersedes_document_id)
+  );
+}
+
+export async function getDocuments(): Promise<DocumentSummary[]> {
+  const data = await apiFetch("/documents");
+  if (!Array.isArray(data) || !data.every(isDocumentSummary)) {
+    throw new Error(
+      "API response schema mismatch: /documents did not return DocumentSummary[]",
+    );
+  }
+  return data;
+}
+
+export async function getDocument(documentId: number): Promise<DocumentSummary> {
+  const data = await apiFetch(`/documents/${documentId}`);
+  if (!isDocumentSummary(data)) {
+    throw new Error(
+      `API response schema mismatch: /documents/${documentId} did not return DocumentSummary`,
+    );
+  }
+  return data;
+}
+
+function isDocumentUploadResult(data: unknown): data is DocumentUploadResult {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.document_id === "number" &&
+    typeof d.file_name === "string" &&
+    typeof d.status === "string"
+  );
+}
+
+export async function uploadDocument(
+  formData: FormData,
+): Promise<DocumentUploadResult> {
+  // Do not set a Content-Type header here: fetch derives the correct
+  // multipart/form-data boundary from the FormData body itself, and a
+  // manually-set header would be missing that boundary and break parsing.
+  const data = await apiFetch("/documents/upload", {
+    method: "POST",
+    body: formData,
+  });
+  if (!isDocumentUploadResult(data)) {
+    throw new Error(
+      "API response schema mismatch: /documents/upload did not return DocumentUploadResult",
+    );
+  }
+  return data;
+}
+
+function isChunkSummary(data: unknown): data is ChunkSummary {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.chunk_id === "string" &&
+    typeof d.strategy_name === "string" &&
+    typeof d.chunk_type === "string" &&
+    typeof d.content === "string" &&
+    typeof d.page_index_start === "number" &&
+    typeof d.page_index_end === "number" &&
+    typeof d.pdf_page_number_start === "number" &&
+    typeof d.pdf_page_number_end === "number" &&
+    isNullableString(d.section_title) &&
+    isNullableString(d.table_title) &&
+    isNullableString(d.embedding_provider) &&
+    isNullableString(d.embedding_model) &&
+    isNullableNumber(d.embedding_dimensions) &&
+    isNullableString(d.embedding_model_version) &&
+    isNullableString(d.embedded_at) &&
+    typeof d.is_active === "boolean"
+  );
+}
+
+export async function getDocumentChunks(
+  documentId: number,
+): Promise<ChunkSummary[]> {
+  const data = await apiFetch(`/documents/${documentId}/chunks`);
+  if (!Array.isArray(data) || !data.every(isChunkSummary)) {
+    throw new Error(
+      `API response schema mismatch: /documents/${documentId}/chunks did not return ChunkSummary[]`,
     );
   }
   return data;

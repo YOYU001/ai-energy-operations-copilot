@@ -10,18 +10,46 @@ CREATE TABLE IF NOT EXISTS documents (
     file_type TEXT,
     source_type TEXT,
     uploaded_at TIMESTAMP,
-    status TEXT
+    status TEXT,
+    document_content_hash TEXT UNIQUE,
+    supersedes_document_id INTEGER REFERENCES documents(id),
+    total_pages INTEGER
 );
 
--- embedding dimension (1536) is a placeholder pending final embedding model choice (see Step 9: Knowledge Base / RAG)
+-- embedding dimension (1536) matches OpenAI text-embedding-3-small, validated by
+-- the Step 6 RAG Feasibility Spike (see docs/RAG_SPIKE_PLAN.md) -- no longer a
+-- placeholder. Schema below mirrors spike/schema_spike.sql's spike_document_chunks
+-- (see docs/RAG_SPIKE_PLAN.md §17 for the production migration this reflects):
+-- chunk_id is a deterministic hash (not SERIAL) so identical content always maps
+-- to the same row, which is what makes the blue-green lifecycle idempotent.
 CREATE TABLE IF NOT EXISTS document_chunks (
-    id SERIAL PRIMARY KEY,
-    document_id INTEGER REFERENCES documents(id),
-    chunk_index INTEGER,
-    content TEXT,
-    page_number INTEGER,
-    embedding vector(1536)
+    chunk_id TEXT PRIMARY KEY,
+    document_id INTEGER NOT NULL REFERENCES documents(id),
+    strategy_name TEXT NOT NULL,
+    chunk_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    embedding_content_hash TEXT NOT NULL,
+    chunk_metadata_hash TEXT NOT NULL,
+    page_index_start INTEGER NOT NULL,
+    page_index_end INTEGER NOT NULL,
+    pdf_page_number_start INTEGER NOT NULL,
+    pdf_page_number_end INTEGER NOT NULL,
+    printed_page_number_map JSONB,
+    section_title TEXT,
+    table_title TEXT,
+    embedding vector(1536),
+    embedding_provider TEXT,
+    embedding_model TEXT,
+    embedding_dimensions INTEGER,
+    embedding_model_version TEXT,
+    embedded_at TIMESTAMP,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS idx_document_chunks_doc_strategy
+    ON document_chunks (document_id, strategy_name);
 
 CREATE TABLE IF NOT EXISTS datasets (
     id SERIAL PRIMARY KEY,

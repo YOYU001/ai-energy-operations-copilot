@@ -118,3 +118,40 @@ export interface AnalysisRunResponse {
   created_at: string;
   result: BatteryDischargeAnalysisResult;
 }
+
+export interface DocumentSummary {
+  id: number;
+  title: string | null;
+  file_name: string | null;
+  file_type: string | null;
+  source_type: string | null;
+  uploaded_at: string | null;
+  status: string;
+  total_pages: number | null;
+  supersedes_document_id: number | null;
+}
+
+export interface DocumentUploadResult {
+  document_id: number;
+  file_name: string;
+  status: string;
+}
+
+export interface ChunkSummary {
+  chunk_id: string;
+  strategy_name: string;
+  chunk_type: string;
+  content: string;
+  page_index_start: number;
+  page_index_end: number;
+  pdf_page_number_start: number;
+  pdf_page_number_end: number;
+  section_title: string | null;
+  table_title: string | null;
+  embedding_provider: string | null;
+  embedding_model: string | null;
+  embedding_dimensions: number | null;
+  embedding_model_version: string | null;
+  embedded_at: string | null;
+  is_active: boolean;
+}

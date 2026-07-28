@@ -1,11 +1,20 @@
 import PageShell from "@/components/layout/PageShell";
+import { getDocuments } from "@/lib/api/client";
 
-export default function DocumentsPage() {
+import DocumentsList from "./DocumentsList";
+import UploadDocumentForm from "./UploadDocumentForm";
+
+export const dynamic = "force-dynamic";
+
+export default async function DocumentsPage() {
+  const documents = await getDocuments();
+
   return (
-    <PageShell title="Documents" description="內部文件知識庫">
-      <p className="text-sm text-foreground/70">
-        尚未開放，等待 Step 10（RAG 正式整合）。
-      </p>
+    <PageShell title="Documents" description="內部文件知識庫（RAG）">
+      <UploadDocumentForm />
+      <div className="mt-6">
+        <DocumentsList documents={documents} />
+      </div>
     </PageShell>
   );
 }

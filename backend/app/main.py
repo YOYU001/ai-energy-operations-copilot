@@ -1,7 +1,9 @@
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import text
 
 from app.datasets_queries import (
@@ -14,15 +16,29 @@ from app.datasets_queries import (
     list_datasets,
 )
 from app.db import get_connection, get_db_dependency
+from app.document_chunks_queries import (
+    create_processing_document,
+    find_supersede_candidate,
+    get_document_by_content_hash,
+    get_document_by_id,
+    list_active_chunks_for_document,
+    list_documents,
+)
 from app.ingestion import ALL_ENERGY_TIMESERIES_COLUMNS, IngestionError, parse_and_validate_csv
 from app.schemas import (
     AnalysisRunResponse,
     BatteryDischargeAnalysisResult,
+    ChunkSummary,
     DatasetSummary,
     DatasetSummaryStatistics,
+    DocumentSummary,
+    DocumentUploadResult,
     IngestResult,
     TimeseriesPage,
 )
+from app.services.embedding_provider import EmbeddingProvider, OpenAIEmbeddingProvider
+from app.services.hashing import compute_document_content_hash
+from app.services.ingestion_rag import READY_STATUS, ingest_pdf_document
 from app.services.rule_engine import (
     ANALYSIS_TYPE,
     RULE_VERSION,
@@ -35,6 +51,13 @@ app = FastAPI()
 # MVP-scale guard against computing a percentile/anomaly scan over an unbounded
 # unpaginated query (see get_dataset_timeseries_for_analysis)
 MAX_ANALYSIS_ROWS = 50_000
+
+# Step 10 MVP: PDF is the only format with a working parse/chunk/embed
+# pipeline (app/services/pdf_parser.py). TXT/MD were mentioned in early Step
+# 10 planning but have no parser implementation yet -- rejecting them here
+# rather than pretending they're supported is a known, documented gap, not
+# an oversight.
+SUPPORTED_DOCUMENT_UPLOAD_EXTENSIONS = {".pdf"}
 
 
 @app.get("/health")
@@ -152,6 +175,109 @@ def post_dataset_analysis(dataset_id: int, conn=Depends(get_db_dependency)):
         inserted = get_analysis_run(conn, dataset_id, ANALYSIS_TYPE, RULE_VERSION)
 
     return _analysis_run_to_response(inserted)
+
+
+def _build_embedding_provider() -> EmbeddingProvider:
+    """Factory seam for the background ingestion task: production calls the
+    real OpenAI-backed provider; tests monkeypatch this function so
+    background tasks never make a real API call."""
+    return OpenAIEmbeddingProvider()
+
+
+def _run_document_ingestion_background(document_id: int, temp_path: str, file_name: str) -> None:
+    """Runs outside the request/response cycle -- must not reuse the
+    request-scoped DB connection (closed by the time this runs) or the
+    original UploadFile (its temp handle is not guaranteed to survive past
+    the response), only the plain file path and primitive values captured
+    while the request was still open.
+
+    ingest_pdf_document already guarantees that any failure from this point
+    onward (parse/OCR/chunk/embed/cutover) marks the document 'failed' and
+    commits before re-raising -- this wrapper only needs to make sure that
+    re-raised exception doesn't crash the background thread, and that the
+    temp file is always cleaned up.
+    """
+    try:
+        with get_connection() as conn:
+            try:
+                ingest_pdf_document(conn, temp_path, file_name, _build_embedding_provider())
+            except Exception:
+                pass  # already recorded as documents.status='failed' by ingest_pdf_document
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+
+
+@app.post("/documents/upload", response_model=DocumentUploadResult)
+async def upload_document(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    conn=Depends(get_db_dependency),
+):
+    original_name = file.filename or ""
+    extension = Path(original_name).suffix.lower()
+    if extension not in SUPPORTED_DOCUMENT_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"unsupported file type '{extension or '(none)'}': this MVP only supports PDF uploads "
+                "(TXT/MD ingestion is not implemented yet)"
+            ),
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="uploaded file is empty")
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
+        tmp.write(content)
+        temp_path = tmp.name
+
+    document_content_hash = compute_document_content_hash(temp_path)
+    existing = get_document_by_content_hash(conn, document_content_hash)
+
+    if existing is not None and existing["status"] == READY_STATUS:
+        Path(temp_path).unlink(missing_ok=True)  # not needed: nothing further will read it
+        return DocumentUploadResult(document_id=existing["id"], file_name=original_name, status="already_ingested")
+
+    if existing is not None:
+        document_id = existing["id"]
+    else:
+        supersedes_document_id = find_supersede_candidate(conn, original_name)
+        document_id = create_processing_document(
+            conn,
+            original_name,
+            document_content_hash,
+            total_pages=None,
+            supersedes_document_id=supersedes_document_id,
+            title=original_name,
+            file_type=extension.lstrip("."),
+            source_type="upload",
+        )
+        conn.commit()
+
+    background_tasks.add_task(_run_document_ingestion_background, document_id, temp_path, original_name)
+
+    return DocumentUploadResult(document_id=document_id, file_name=original_name, status="processing")
+
+
+@app.get("/documents", response_model=list[DocumentSummary])
+def get_documents(conn=Depends(get_db_dependency)):
+    return list_documents(conn)
+
+
+@app.get("/documents/{document_id}", response_model=DocumentSummary)
+def get_document(document_id: int, conn=Depends(get_db_dependency)):
+    document = get_document_by_id(conn, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail=f"document {document_id} not found")
+    return document
+
+
+@app.get("/documents/{document_id}/chunks", response_model=list[ChunkSummary])
+def get_document_chunks(document_id: int, conn=Depends(get_db_dependency)):
+    if get_document_by_id(conn, document_id) is None:
+        raise HTTPException(status_code=404, detail=f"document {document_id} not found")
+    return list_active_chunks_for_document(conn, document_id)
 
 
 @app.post("/datasets/upload", response_model=IngestResult)

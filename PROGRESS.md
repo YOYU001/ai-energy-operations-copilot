@@ -4,7 +4,7 @@
 打造 **AI Energy Operations Copilot MVP v1**，作為 NVIDIA 面試作品集與 AI 工程能力展示專案。
 
 ## Current Phase
-Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → **Step 9：Rule-Based Anomaly Diagnosis — 驗收通過（完成）**，`BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT` 規則、GET/POST analysis API、`/analysis` 與 `/analysis/[id]` 頁面、Server Action 執行流程均已驗證。Step 10（Knowledge Base / RAG production integration）已完整規劃（schema gap analysis、migration order、rollback plan — docs/RAG_SPIKE_PLAN.md §17）但尚未執行；roadmap 順序維持不變（docs/PROJECT_ALIGNMENT_REVIEW.md §9）。下一步：**Step 10：Knowledge Base / RAG（正式版）**（尚未開始）。
+Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → **Step 10：Knowledge Base / RAG（正式版）— 8 個 sub-step 全數完成並正式結案**。Production `documents`/`document_chunks` schema、PDF ingestion pipeline（parsing/OCR/chunking/embedding）、deterministic chunk lifecycle、blue-green cutover、duplicate/failure retry、Documents Backend API（非同步上傳）、production retrieval service、真實 OpenAI regression benchmark（零 regression）、`/documents` 與 `/documents/[id]` frontend 均已完成並經真實 end-to-end 驗證。下一步：**Step 11：Case Similarity**（尚未開始）。
 
 ## Completed
 - 定義 MVP v1 產品範圍、技術棧、Internal Knowledge Only 原則、初版 data schema，以及 Claude Code learning-by-building / 漸進式開發流程。
@@ -34,6 +34,12 @@ Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Documen
 - Step 7 — Frontend Foundation：驗收通過。Next.js 骨架、Overview／Datasets 真實串接 FastAPI，lint/build 通過。Details: docs/STEP7_FRONTEND_PLAN.md §11。
 - Step 8 — Dashboard Charts：驗收通過。新增 `datasets/[id]` 詳細圖表頁（5 組圖表）並修正孤立資料點顯示問題，各項邊界狀態（多場域、空資料、截斷、契約容量、全 null 等）均驗證通過。`error.tsx` 重試按鈕改用 Next.js 16.2 `unstable_retry()` 修正真正重新 fetch 的問題。lint/build/tsc 皆通過。
 - Step 9 — Rule-Based Anomaly Diagnosis：驗收通過。新增 `rule_engine.py`（`BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT`）、冪等的 `GET`/`POST /datasets/{id}/analysis`、`/analysis` 與 `/analysis/[id]` 頁面。29 個新測試，全專案 142 個測試通過。
+- Step 10 Sub-step 1–2 — Schema Migration + Ingestion Pure Logic：正式 `documents`/`document_chunks` schema 導入 deterministic `chunk_id`、blue-green lifecycle 欄位；`hashing`/`pdf_parser`/`chunker`/`embedding_provider`/`ocr_fallback` 從 spike 正式搬遷至 `backend/app/services/`。179 個測試通過。
+- Step 10 Sub-step 3 — Production RAG Persistence：`document_chunks_queries.py` + `ingestion_rag.py` 完成 idempotent ingest、file_name-based supersede、blue-green atomic cutover；真實 PostgreSQL 驗證涵蓋 duplicate/failed-retry 無 PK collision。
+- Step 10 Sub-step 4 — Documents Backend API：`POST /documents/upload`（FastAPI `BackgroundTasks` 非同步）、`GET /documents`、`/documents/{id}`、`/documents/{id}/chunks`。修正兩個真實 bug：failed document 被誤判為 already_ingested 導致永遠無法 retry；parsing 例外未被捕捉導致 document 永久卡在 processing。
+- Step 10 Sub-step 5 — Production Retrieval Service + 真實 OpenAI Regression Benchmark：`query_parser.py`/`retrieval.py`/`retrieval_metrics.py` 正式化（semantic + date/table metadata boost，WEIGHTS 沿用 spike 未重新 tuning）。對 doc1/doc3/doc4 三份真實文件重跑 benchmark，逐題與 spike baseline 完全一致，零 regression（document_scoped hit@1/3/5 = 64%/91%/100%；global hit@3 = 82%，如實記錄未美化）。
+- Step 10 Sub-step 6–7 — Frontend `/documents` 與 `/documents/[id]`：文件列表 + PDF 上傳（processing/ready/failed 狀態 + polling 自動更新）、metadata 與 active chunk viewer（`<details>` compact expandable cards，不暴露 embedding vector）。lint/build 皆通過。
+- Step 10 Sub-step 8 — Final Integration Verification：真實 end-to-end 驗證 new upload／duplicate／same-filename-supersede／failure-then-retry 全數通過（含真實 embedding 失敗後 retry 成功、零 PK collision，透過臨時切換 API key 觸發真實 embedding 失敗，而非用假 provider 模擬）；retrieval smoke test 確認 inactive chunk 不外洩、document filter 與 metadata boost 正常。Step 10 正式結案，全專案 262 個測試通過。
 
 ## Important Decisions
 - Frontend：Next.js
@@ -92,9 +98,17 @@ MVP v1 應涵蓋：
 - 尚無針對真實資料庫的自動化整合測試（Step 5 的測試使用 fake connection）；列為獨立後續項目，不屬於 Step 5 或 RAG spike 的範圍。
 - Data lifecycle 欄位（status/version/effective_from/effective_until/archived_at/deleted_at/superseded_by/retention_until）已確認可在不需大改的情況下加入 schema，但尚未加入；時機留待實際需要時再處理。
 - 詳細風險與盲點（幻覺、citation 準確性、OCR 品質、confidence 門檻、成本等）已記錄於 `docs/PROJECT_ALIGNMENT_REVIEW.md` 第 6 節，此處不重複列出。
+- Step 10 上傳目前只支援 PDF，不支援 TXT / MD（Step 10 planning 曾提及，但實際只有 PDF parser，已如實記錄為 gap 而非佯裝支援）。
+- Step 10 supersede 暫時以 `file_name` 判斷是否為同文件新版；改檔名後會被視為無關的新文件，無法自動識別為同文件的新版本。
+- Step 10 retrieval hybrid 不包含 BM25 / full-text search，僅 semantic + date/table metadata boost。
+- Step 10 pgvector 目前為 brute-force `ORDER BY embedding <=> query_vector`，未建立 ANN index（HNSW/IVFFlat）。
+- Step 10 regression benchmark 為手動執行（`backend/scripts/run_retrieval_benchmark.py`），因涉及真實 OpenAI API 費用，不進 default CI。
+- Step 10 EasyOCR 已提供 `OcrReader`/`EasyOcrReaderProvider` injection interface，但目前只驗證單一 process 場景，尚未驗證 production concurrency（多 request 同時觸發 OCR）下的行為。
+- Step 10 `printed_page_number_map` 尚未由 `/documents/{id}/chunks` API 或 frontend 顯示；已在 Sub-step 7 執行前明確回報此 backend contract gap，決定不擴大 backend scope。
+- Step 10 background ingestion 使用 FastAPI `BackgroundTasks`，適合目前 MVP 規模，但不是 durable job queue：process crash 或 server restart 時，正在執行中的 background task 沒有自動恢復機制（document 會停留在該次 crash 前的最後狀態，需要使用者手動重新上傳觸發 retry）。
 
 ## Next Step
-**Step 10：Knowledge Base / RAG（正式版）**（docs/PROJECT_ALIGNMENT_REVIEW.md §9、docs/DEVELOPMENT_WORKFLOW.md 第 6 節）。**尚未開始規劃或實作。** 基於 Step 6 RAG Feasibility Spike 的結論展開；schema gap analysis、migration order、reuse/refactor list、rollback plan 已於 docs/RAG_SPIKE_PLAN.md §17 完整規劃，尚未執行。下一步動作：比照 Step 7/8/9 的流程，先完成 Step 10 的教學與 implementation plan，經確認後再開始實作。Step 6 剩餘的已知限制（q15 retrieval 盲點、q20 跨 chunk 失敗、doc4 有 5 個表格在句尾標點處被截斷、`is_active` 的保留／清理政策、q03/q04/q05 的 ground truth、`multi_chunk_coverage_threshold` 調整）已記錄於 docs/RAG_SPIKE_PLAN.md §18，列為可接受、非阻塞、於 Step 10 實際執行時再處理。
+**Step 11：Case Similarity**（docs/PROJECT_ALIGNMENT_REVIEW.md §9、docs/DEVELOPMENT_WORKFLOW.md 第 6 節）。**尚未開始規劃或實作。** Step 10（Knowledge Base / RAG 正式版）已於 8 個 sub-step 全數完成後正式結案（Go）：production schema、ingestion pipeline、blue-green lifecycle、Documents Backend API、retrieval service、真實 OpenAI regression benchmark 零 regression、`/documents` 與 `/documents/[id]` frontend 均已完成並經真實 end-to-end 驗證。下一步動作：比照 Step 7–10 的流程，先完成 Step 11 的教學與 implementation plan，經確認後再開始實作。
 
 ## Files To Read Next Time
 每次一定要先讀：
