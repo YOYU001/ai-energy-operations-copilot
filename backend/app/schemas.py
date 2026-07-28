@@ -130,3 +130,40 @@ class AnalysisRunResponse(BaseModel):
     rule_version: str
     created_at: datetime
     result: BatteryDischargeAnalysisResult
+
+
+class DocumentSummary(BaseModel):
+    id: int
+    title: Optional[str] = None
+    file_name: Optional[str] = None
+    file_type: Optional[str] = None
+    source_type: Optional[str] = None
+    uploaded_at: Optional[datetime] = None
+    status: str
+    total_pages: Optional[int] = None
+    supersedes_document_id: Optional[int] = None
+
+
+class DocumentUploadResult(BaseModel):
+    document_id: int
+    file_name: str
+    status: str  # "processing" | "already_ingested"
+
+
+class ChunkSummary(BaseModel):
+    chunk_id: str
+    strategy_name: str
+    chunk_type: str
+    content: str
+    page_index_start: int
+    page_index_end: int
+    pdf_page_number_start: int
+    pdf_page_number_end: int
+    section_title: Optional[str] = None
+    table_title: Optional[str] = None
+    embedding_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
+    embedding_dimensions: Optional[int] = None
+    embedding_model_version: Optional[str] = None
+    embedded_at: Optional[datetime] = None
+    is_active: bool
