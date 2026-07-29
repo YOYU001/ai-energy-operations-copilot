@@ -56,12 +56,14 @@ docs/ANTHROPIC_LEARN_MAP.md
 docs/DECISIONS.md
 docs/OFFICIAL_UPDATE_LOG.md
 docs/LEARNING_LOG.md
+docs/NVIDIA_AI_EVALUATION_ROADMAP.md
 skills/*
 ```
 
 使用時機：
 
 - 任務涉及 RAG、Agent、MCP、Hooks、Skills、Evaluations、Prompt Caching。
+- 任務涉及 AI 模型/工具評測、NVIDIA NeMo Evaluator、RAG Evaluation、Agent Evaluation、Performance Benchmarking（讀 `docs/NVIDIA_AI_EVALUATION_ROADMAP.md`）。
 - 任務涉及 Anthropic 官方最新模型、產品或 Claude Code 更新。
 - 建立新模組、重要 feature、複雜 bug、refactor 或 milestone。
 - 需要完整 Git / GitHub、NVIDIA 面試或技術學習規則。

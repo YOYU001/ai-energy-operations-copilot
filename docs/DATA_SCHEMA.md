@@ -264,7 +264,7 @@ related_time_range
 
 ### case_id
 
-案件唯一識別碼。
+案件唯一識別碼。**Required and unique**（`TEXT NOT NULL UNIQUE`，Step 11 Sub-step 2B 新增）：穩定的業務識別碼，query layer 的 upsert 以此欄位做 `ON CONFLICT` 判斷，因此不可為 null、不可重複。
 
 ### site_id
 
@@ -460,7 +460,16 @@ tags
 related_dataset_id
 related_time_range
 embedding
+embedding_provider
+embedding_model
+embedding_dimensions
+embedding_model_version
+embedded_at
+created_at
+updated_at
 ```
+
+備註：`embedding_provider`/`embedding_model`/`embedding_dimensions`/`embedding_model_version`/`embedded_at`（Step 11 新增）與 `document_chunks` 的 embedding provenance 欄位設計一致（見 ADR-004：provider 不寫死、記錄 model/version，保留未來重新 embedding 的能力）。
 
 ### analysis_runs
 

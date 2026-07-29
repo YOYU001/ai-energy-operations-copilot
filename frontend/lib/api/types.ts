@@ -155,3 +155,58 @@ export interface ChunkSummary {
   embedded_at: string | null;
   is_active: boolean;
 }
+
+export interface CaseSummary {
+  case_id: string;
+  event_type: string | null;
+  symptoms: string | null;
+  tags: string | null;
+  severity: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CasesPage {
+  total: number;
+  limit: number;
+  offset: number;
+  items: CaseSummary[];
+}
+
+export interface CaseDetail {
+  case_id: string;
+  site_id: string | null;
+  event_time: string | null;
+  event_type: string | null;
+  symptoms: string | null;
+  root_cause: string | null;
+  operator_action: string | null;
+  resolution_result: string | null;
+  severity: string | null;
+  tags: string | null;
+  related_dataset_id: number | null;
+  related_time_range: string | null;
+  embedding_provider: string | null;
+  embedding_model: string | null;
+  embedding_dimensions: number | null;
+  embedding_model_version: string | null;
+  embedded_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CaseSearchResult {
+  case_id: string;
+  event_type: string | null;
+  symptoms: string | null;
+  tags: string | null;
+  severity: string | null;
+  semantic_score: number;
+  event_type_match: boolean;
+  tags_boost: number;
+  final_score: number;
+  confidence: string;
+  symptoms_similarity: string;
+  matches: string[];
+  differs: string[];
+}

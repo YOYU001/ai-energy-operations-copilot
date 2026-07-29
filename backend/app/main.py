@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import text
 
+from app.case_records_queries import get_case_by_case_id
 from app.datasets_queries import (
     get_analysis_run,
     get_dataset_by_id,
@@ -28,6 +29,11 @@ from app.ingestion import ALL_ENERGY_TIMESERIES_COLUMNS, IngestionError, parse_a
 from app.schemas import (
     AnalysisRunResponse,
     BatteryDischargeAnalysisResult,
+    CaseDetail,
+    CasesPage,
+    CaseSearchRequest,
+    CaseSearchResult,
+    CaseSummary,
     ChunkSummary,
     DatasetSummary,
     DatasetSummaryStatistics,
@@ -36,6 +42,17 @@ from app.schemas import (
     IngestResult,
     TimeseriesPage,
 )
+from app.services.case_retrieval import (
+    DEFAULT_TOP_K,
+    MAX_TOP_K,
+    MIN_TOP_K,
+    CaseHasNoEmbedding,
+    CaseNotFound,
+    find_similar_to_case,
+    list_case_summaries,
+    search_by_text,
+)
+from app.services.case_similarity import ScoredCase, symptoms_similarity_label
 from app.services.embedding_provider import EmbeddingProvider, OpenAIEmbeddingProvider
 from app.services.hashing import compute_document_content_hash
 from app.services.ingestion_rag import READY_STATUS, ingest_pdf_document
@@ -278,6 +295,77 @@ def get_document_chunks(document_id: int, conn=Depends(get_db_dependency)):
     if get_document_by_id(conn, document_id) is None:
         raise HTTPException(status_code=404, detail=f"document {document_id} not found")
     return list_active_chunks_for_document(conn, document_id)
+
+
+def _scored_case_to_search_result(s: ScoredCase) -> CaseSearchResult:
+    return CaseSearchResult(
+        case_id=s.case_id,
+        event_type=s.event_type,
+        symptoms=s.symptoms,
+        tags=s.tags,
+        severity=s.severity,
+        semantic_score=s.semantic_score,
+        event_type_match=s.event_type_match,
+        tags_boost=s.tags_boost,
+        final_score=s.final_score,
+        confidence=s.confidence,
+        symptoms_similarity=symptoms_similarity_label(s.semantic_score),
+        matches=s.matches,
+        differs=s.differs,
+    )
+
+
+@app.get("/cases", response_model=CasesPage)
+def get_cases(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    conn=Depends(get_db_dependency),
+):
+    total, items = list_case_summaries(conn, limit, offset)
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+@app.get("/cases/{case_id}", response_model=CaseDetail)
+def get_case(case_id: str, conn=Depends(get_db_dependency)):
+    case = get_case_by_case_id(conn, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail=f"case {case_id} not found")
+    return case
+
+
+@app.get("/cases/{case_id}/similar", response_model=list[CaseSearchResult])
+def get_similar_cases(
+    case_id: str,
+    top_k: int = Query(DEFAULT_TOP_K, ge=MIN_TOP_K, le=MAX_TOP_K),
+    conn=Depends(get_db_dependency),
+):
+    try:
+        scored = find_similar_to_case(conn, case_id, top_k)
+    except CaseNotFound:
+        raise HTTPException(status_code=404, detail=f"case {case_id} not found")
+    except CaseHasNoEmbedding:
+        raise HTTPException(
+            status_code=422,
+            detail="this case has no embedding yet, cannot compute similarity",
+        )
+    return [_scored_case_to_search_result(s) for s in scored]
+
+
+@app.post("/cases/search", response_model=list[CaseSearchResult])
+def post_case_search(request: CaseSearchRequest, conn=Depends(get_db_dependency)):
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query must not be blank")
+
+    scored = search_by_text(
+        conn,
+        _build_embedding_provider(),
+        query,
+        event_type=request.event_type,
+        tags=request.tags,
+        top_k=request.top_k,
+    )
+    return [_scored_case_to_search_result(s) for s in scored]
 
 
 @app.post("/datasets/upload", response_model=IngestResult)

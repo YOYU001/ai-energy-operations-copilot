@@ -93,10 +93,20 @@ CREATE TABLE IF NOT EXISTS energy_timeseries (
     battery_available_capacity_kwh NUMERIC
 );
 
--- embedding dimension (1536) is a placeholder pending final embedding model choice (see Step 9: Knowledge Base / RAG)
+-- embedding dimension (1536) matches OpenAI text-embedding-3-small, validated
+-- by the Step 6 RAG Feasibility Spike and already used in production by
+-- document_chunks (Step 10) -- no longer a placeholder. Provenance and
+-- timestamp columns mirror document_chunks' precedent (ADR-004: provider
+-- not hardcoded, model/version recorded per row so a future re-embedding
+-- pass can tell which rows are stale), added for Step 11 (Case Similarity).
 CREATE TABLE IF NOT EXISTS case_records (
     id SERIAL PRIMARY KEY,
-    case_id TEXT,
+    -- Stable business identifier for a case (Step 11 Sub-step 2B): required
+    -- and unique so upsert_case_record can rely on a real DB-level
+    -- ON CONFLICT (case_id) for atomic upsert, instead of an application-
+    -- level SELECT-then-branch race. UNIQUE alone would still allow
+    -- multiple NULLs, hence NOT NULL as well.
+    case_id TEXT NOT NULL UNIQUE,
     site_id TEXT,
     event_time TIMESTAMP,
     event_type TEXT,
@@ -108,7 +118,14 @@ CREATE TABLE IF NOT EXISTS case_records (
     tags TEXT,
     related_dataset_id INTEGER REFERENCES datasets(id),
     related_time_range TEXT,
-    embedding vector(1536)
+    embedding vector(1536),
+    embedding_provider TEXT,
+    embedding_model TEXT,
+    embedding_dimensions INTEGER,
+    embedding_model_version TEXT,
+    embedded_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS analysis_runs (
