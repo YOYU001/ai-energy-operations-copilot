@@ -117,6 +117,23 @@ def test_find_similar_to_case_respects_top_k():
     assert len(result) == 2
 
 
+def test_find_similar_to_case_compares_source_case_severity_against_candidates():
+    # Source case's own severity ("high") is the query-side severity for
+    # this path -- a candidate sharing it must show as a severity match, one
+    # that doesn't must show as a severity differ (PR #37 Codex review, P2).
+    case_row = {"case_id": "case-0001", "event_type": "X", "tags": "a", "severity": "high", "embedding": "[0.1, 0.2]"}
+    candidates = [
+        _candidate("case-0002", distance=0.1),  # _candidate default severity="high"
+        {**_candidate("case-0003", distance=0.2), "severity": "low"},
+    ]
+    conn = FakeConnection(responses=[[case_row], candidates])
+
+    result = find_similar_to_case(conn, "case-0001", top_k=5)
+    by_id = {s.case_id: s for s in result}
+    assert any(m.startswith("severity:") for m in by_id["case-0002"].matches)
+    assert any(d.startswith("severity:") for d in by_id["case-0003"].differs)
+
+
 # ---------------------------------------------------------------------------
 # search_by_text (free-text)
 # ---------------------------------------------------------------------------
@@ -156,6 +173,20 @@ def test_search_by_text_applies_event_type_and_tags_to_scoring():
     )
     assert result[0].event_type_match is True
     assert result[0].tags_boost > 0.0
+
+
+def test_search_by_text_never_puts_severity_in_matches_or_differs():
+    # Free-text search has no query-side severity input at all -- a
+    # candidate having a severity must never be shown as a "match" or
+    # "differ" with nothing on the query side to compare against (PR #37
+    # Codex review, P2).
+    provider = _FakeEmbeddingProvider()
+    candidates = [_candidate("case-0001", distance=0.1)]  # _candidate default severity="high"
+    conn = FakeConnection(rows=candidates)
+
+    result = search_by_text(conn, provider, "query", event_type=None, tags=None, top_k=5)
+    all_reasons = result[0].matches + result[0].differs
+    assert not any(r.startswith("severity:") for r in all_reasons)
 
 
 def test_search_by_text_propagates_embedding_provider_error():

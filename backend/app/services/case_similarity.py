@@ -31,6 +31,7 @@ had spike/test_questions.json). Revisit once real usage/query data exists.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Optional
 
 # Flat, capped boosts -- deliberately small relative to the semantic score's
 # full [0, 1] range, so metadata alone can never make a poor semantic match
@@ -46,25 +47,32 @@ CONFIDENCE_THRESHOLDS = {
     "medium": 0.70,
 }
 
-# Separate, PROVISIONAL thresholds for describing symptoms similarity in
+# Separate, PROVISIONAL thresholds for describing overall case similarity in
 # matches/differs. Deliberately NOT the same buckets as CONFIDENCE_THRESHOLDS:
 # confidence describes final_score (semantic + boosts), this describes
-# semantic_score alone -- the only signal symptoms text actually feeds into.
-# The label is always a semantic-similarity *description*, never a claim
-# that the symptoms text itself matches or is identical.
-SYMPTOMS_SIMILARITY_THRESHOLDS = {
+# semantic_score alone.
+#
+# NOTE: semantic_score comes from the embedding of build_case_search_text(),
+# which concatenates event_type + symptoms + tags + severity (see
+# scripts/seed_case_records.py). It is a COMPOSITE case-similarity signal,
+# NOT a symptoms-only comparison -- two cases sharing event_type/tags can
+# score highly here even if their symptom descriptions actually differ. Do
+# not rename this back to anything implying "symptom similarity" (PR #37
+# Codex review, P2) -- that was the original, misleading name.
+CASE_SIMILARITY_THRESHOLDS = {
     "high": 0.80,
     "medium": 0.55,
 }
 
 
-def symptoms_similarity_label(semantic_score: float) -> str:
+def case_similarity_label(semantic_score: float) -> str:
     """Bucket semantic_score into one of three fixed, centrally-defined
-    labels. Never claims literal/exact symptom text matching -- only
-    describes how semantically close the two symptoms descriptions are."""
-    if semantic_score >= SYMPTOMS_SIMILARITY_THRESHOLDS["high"]:
+    labels describing overall case similarity (event_type + symptoms + tags
+    + severity combined) -- never claims this isolates symptom text
+    similarity specifically."""
+    if semantic_score >= CASE_SIMILARITY_THRESHOLDS["high"]:
         return "高度語意相似"
-    if semantic_score >= SYMPTOMS_SIMILARITY_THRESHOLDS["medium"]:
+    if semantic_score >= CASE_SIMILARITY_THRESHOLDS["medium"]:
         return "中度語意相似"
     return "低度語意相似"
 
@@ -87,17 +95,17 @@ CASE_DISPLAY_FIELDS = (
 @dataclass
 class ScoredCase:
     case_id: str
-    site_id: str | None
+    site_id: Optional[str]
     event_time: object
-    event_type: str | None
-    symptoms: str | None
-    root_cause: str | None
-    operator_action: str | None
-    resolution_result: str | None
-    severity: str | None
-    tags: str | None
-    related_dataset_id: int | None
-    related_time_range: str | None
+    event_type: Optional[str]
+    symptoms: Optional[str]
+    root_cause: Optional[str]
+    operator_action: Optional[str]
+    resolution_result: Optional[str]
+    severity: Optional[str]
+    tags: Optional[str]
+    related_dataset_id: Optional[int]
+    related_time_range: Optional[str]
     vector_distance: float
     semantic_score: float
     event_type_match: bool
@@ -113,7 +121,7 @@ def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
 
-def normalize_tags(tags: str | None) -> set[str]:
+def normalize_tags(tags: Optional[str]) -> set[str]:
     """Comma-separated tags (docs/DATA_SCHEMA.md section 5 convention, e.g.
     "PV,cloudy,SOC,peak_shaving"), trimmed and lowercased. Never raises on
     malformed input (None, empty string, stray/duplicate commas, extra
@@ -147,8 +155,9 @@ def confidence_for_score(score: float) -> str:
 
 def _build_matches_and_differs(
     *,
-    query_event_type: str | None,
+    query_event_type: Optional[str],
     query_tags_set: set[str],
+    query_severity: Optional[str],
     candidate: dict,
     candidate_tags_set: set[str],
     semantic_score: float,
@@ -169,21 +178,33 @@ def _build_matches_and_differs(
     if missing_tags:
         differs.append(f"tags: {', '.join(sorted(missing_tags))}")
 
-    if candidate.get("severity"):
-        # Informational only -- severity never contributes to the score.
-        matches.append(f"severity: {candidate['severity']}")
+    # Only ever appears in matches/differs when the query side actually
+    # supplies a severity to compare against (case-to-case: the source
+    # case's own severity). A candidate merely *having* a severity is not a
+    # "match" -- free-text search currently has no query-side severity input
+    # at all, so this stays out of matches/differs entirely for that path
+    # (PR #37 Codex review, P2 -- previously every candidate with any
+    # severity was wrongly shown as a green "match" badge with nothing to
+    # compare against). The candidate's own severity is still visible via
+    # CaseSearchResult.severity, so no information is lost by omitting it here.
+    if query_severity is not None:
+        candidate_severity = candidate.get("severity")
+        if candidate_severity == query_severity:
+            matches.append(f"severity: {candidate_severity}")
+        else:
+            differs.append(f"severity: query={query_severity} vs candidate={candidate_severity}")
 
-    # symptoms: a semantic-similarity DESCRIPTION derived from semantic_score,
-    # never a claim that the symptoms text is identical or "matches" in the
-    # literal sense -- routed to matches/differs by bucket so a low semantic
-    # score is visible as a differs entry even if event_type/tags boosts
-    # pushed final_score up.
-    symptoms_label = symptoms_similarity_label(semantic_score)
-    symptoms_description = f"symptoms: {symptoms_label}（語意相似度 {semantic_score:.2f}，非逐字相符）"
-    if semantic_score >= SYMPTOMS_SIMILARITY_THRESHOLDS["medium"]:
-        matches.append(symptoms_description)
+    # case_similarity: a semantic-similarity DESCRIPTION derived from
+    # semantic_score, never a claim that the symptoms text specifically is
+    # identical or "matches" in the literal sense -- routed to matches/
+    # differs by bucket so a low semantic score is visible as a differs
+    # entry even if event_type/tags boosts pushed final_score up.
+    similarity_label = case_similarity_label(semantic_score)
+    similarity_description = f"case_similarity: {similarity_label}（語意相似度 {semantic_score:.2f}，非逐字相符）"
+    if semantic_score >= CASE_SIMILARITY_THRESHOLDS["medium"]:
+        matches.append(similarity_description)
     else:
-        differs.append(symptoms_description)
+        differs.append(similarity_description)
 
     return matches, differs
 
@@ -191,8 +212,9 @@ def _build_matches_and_differs(
 def score_case(
     candidate: dict,
     *,
-    query_event_type: str | None = None,
-    query_tags: str | None = None,
+    query_event_type: Optional[str] = None,
+    query_tags: Optional[str] = None,
+    query_severity: Optional[str] = None,
 ) -> ScoredCase:
     """candidate must have all of CASE_DISPLAY_FIELDS plus a "distance" key
     (pgvector cosine distance, as returned by
@@ -214,6 +236,7 @@ def score_case(
     matches, differs = _build_matches_and_differs(
         query_event_type=query_event_type,
         query_tags_set=query_tags_set,
+        query_severity=query_severity,
         candidate=candidate,
         candidate_tags_set=candidate_tags_set,
         semantic_score=semantic_score,
@@ -236,10 +259,14 @@ def score_case(
 def score_candidates(
     candidates: list[dict],
     *,
-    query_event_type: str | None = None,
-    query_tags: str | None = None,
+    query_event_type: Optional[str] = None,
+    query_tags: Optional[str] = None,
+    query_severity: Optional[str] = None,
 ) -> list[ScoredCase]:
-    scored = [score_case(c, query_event_type=query_event_type, query_tags=query_tags) for c in candidates]
+    scored = [
+        score_case(c, query_event_type=query_event_type, query_tags=query_tags, query_severity=query_severity)
+        for c in candidates
+    ]
     # Stable, fully-deterministic ordering: ties on final_score break on
     # ascending vector_distance, then on case_id, so result order never
     # depends on incidental input/dict-iteration order (same principle as

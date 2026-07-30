@@ -186,6 +186,19 @@ def test_schema_sql_declares_case_id_not_null_unique():
     assert "case_id TEXT NOT NULL UNIQUE" in schema_text
 
 
+def test_schema_sql_has_repeatable_upgrade_path_for_existing_databases():
+    """PR #37 Codex review, P1: CREATE TABLE IF NOT EXISTS alone is a no-op
+    against a case_records table created before case_id was NOT NULL UNIQUE
+    -- schema.sql must also carry an idempotent upgrade path that (a) never
+    silently drops/rewrites bad existing data, and (b) is safe to re-run.
+    """
+    schema_text = SCHEMA_SQL_PATH.read_text(encoding="utf-8")
+    assert "ADD COLUMN IF NOT EXISTS embedding_content_hash" in schema_text
+    assert "RAISE EXCEPTION" in schema_text
+    assert "case_records_case_id_key" in schema_text
+    assert "ALTER COLUMN case_id SET NOT NULL" in schema_text
+
+
 def test_get_case_by_id():
     conn = FakeCaseRecordsConnection()
     new_id = upsert_case_record(conn, **_kwargs())

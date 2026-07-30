@@ -21,6 +21,8 @@ read and write rows.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from sqlalchemy import text
 
 
@@ -82,23 +84,23 @@ def upsert_case_record(
     conn,
     *,
     case_id: str,
-    site_id: str | None,
+    site_id: Optional[str],
     event_time,
-    event_type: str | None,
-    symptoms: str | None,
-    root_cause: str | None,
-    operator_action: str | None,
-    resolution_result: str | None,
-    severity: str | None,
-    tags: str | None,
-    related_dataset_id: int | None,
-    related_time_range: str | None,
-    embedding: list[float] | None = None,
-    embedding_provider: str | None = None,
-    embedding_model: str | None = None,
-    embedding_dimensions: int | None = None,
-    embedding_model_version: str | None = None,
-    embedding_content_hash: str | None = None,
+    event_type: Optional[str],
+    symptoms: Optional[str],
+    root_cause: Optional[str],
+    operator_action: Optional[str],
+    resolution_result: Optional[str],
+    severity: Optional[str],
+    tags: Optional[str],
+    related_dataset_id: Optional[int],
+    related_time_range: Optional[str],
+    embedding: Optional[list[float]] = None,
+    embedding_provider: Optional[str] = None,
+    embedding_model: Optional[str] = None,
+    embedding_dimensions: Optional[int] = None,
+    embedding_model_version: Optional[str] = None,
+    embedding_content_hash: Optional[str] = None,
 ) -> int:
     """Atomically insert a new case_records row, or update the existing row
     with this case_id if one already exists (via `ON CONFLICT (case_id) DO

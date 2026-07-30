@@ -16,6 +16,8 @@ matching the Sub-step 3 API contract decision.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from app.case_records_queries import fetch_candidate_cases, get_case_by_case_id, list_cases
 from app.services.case_similarity import ScoredCase, score_candidates
 from app.services.embedding_provider import EmbeddingProvider
@@ -44,7 +46,7 @@ def list_case_summaries(conn, limit: int, offset: int) -> tuple[int, list[dict]]
     return list_cases(conn, limit, offset)
 
 
-def get_case_detail(conn, case_id: str) -> dict | None:
+def get_case_detail(conn, case_id: str) -> Optional[dict]:
     return get_case_by_case_id(conn, case_id)
 
 
@@ -57,7 +59,12 @@ def find_similar_to_case(conn, case_id: str, top_k: int) -> list[ScoredCase]:
 
     candidates = fetch_candidate_cases(conn, case["embedding"], pool_size=POOL_SIZE)
     candidates = [c for c in candidates if c["case_id"] != case_id]
-    scored = score_candidates(candidates, query_event_type=case.get("event_type"), query_tags=case.get("tags"))
+    scored = score_candidates(
+        candidates,
+        query_event_type=case.get("event_type"),
+        query_tags=case.get("tags"),
+        query_severity=case.get("severity"),
+    )
     return scored[:top_k]
 
 
@@ -65,8 +72,8 @@ def search_by_text(
     conn,
     embedding_provider: EmbeddingProvider,
     query: str,
-    event_type: str | None,
-    tags: str | None,
+    event_type: Optional[str],
+    tags: Optional[str],
     top_k: int,
 ) -> list[ScoredCase]:
     embed_result = embedding_provider.embed_batch([query])

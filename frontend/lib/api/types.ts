@@ -206,7 +206,7 @@ export interface CaseSearchResult {
   tags_boost: number;
   final_score: number;
   confidence: string;
-  symptoms_similarity: string;
+  case_similarity: string;
   matches: string[];
   differs: string[];
 }

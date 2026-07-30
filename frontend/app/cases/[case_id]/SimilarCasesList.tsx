@@ -30,7 +30,7 @@ export default function SimilarCasesList({
               final_score：{r.final_score.toFixed(3)}
             </span>
             <span className="text-xs text-foreground/60">
-              {r.symptoms_similarity}
+              {r.case_similarity}
             </span>
           </div>
           <p className="mt-1 line-clamp-2 text-foreground/70">

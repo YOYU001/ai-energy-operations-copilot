@@ -239,6 +239,11 @@ class CaseSearchResult(BaseModel):
     tags_boost: float
     final_score: float
     confidence: str
-    symptoms_similarity: str
+    # Composite semantic-similarity description (event_type + symptoms + tags
+    # + severity combined -- see build_case_search_text in
+    # scripts/seed_case_records.py), NOT a symptoms-only comparison. Renamed
+    # from symptoms_similarity (PR #37 Codex review, P2) -- the old name
+    # implied it isolated symptom text similarity, which it never did.
+    case_similarity: str
     matches: list[str]
     differs: list[str]

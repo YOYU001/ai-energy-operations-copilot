@@ -6,15 +6,15 @@ values without depending on any real embedding.
 """
 
 from app.services.case_similarity import (
+    CASE_SIMILARITY_THRESHOLDS,
     CONFIDENCE_THRESHOLDS,
-    SYMPTOMS_SIMILARITY_THRESHOLDS,
     WEIGHTS,
+    case_similarity_label,
     clamp,
     confidence_for_score,
     normalize_tags,
     score_candidates,
     score_case,
-    symptoms_similarity_label,
     tags_overlap_ratio,
 )
 
@@ -193,11 +193,60 @@ def test_matches_and_differs_for_full_match():
         _candidate("x", distance=0.1, event_type="BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT", tags="peak_shaving,soc", severity="high"),
         query_event_type="BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT",
         query_tags="peak_shaving,soc",
+        query_severity="high",
     )
     assert "event_type: BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT" in result.matches
     assert any(m.startswith("tags:") for m in result.matches)
     assert any(m.startswith("severity:") for m in result.matches)
     assert result.differs == []
+
+
+# ---------------------------------------------------------------------------
+# severity must only appear in matches/differs when the query side actually
+# supplies a severity to compare against (PR #37 Codex review, P2 -- a
+# candidate merely *having* a severity is not a "match")
+# ---------------------------------------------------------------------------
+
+
+def test_severity_absent_from_matches_and_differs_when_query_severity_is_none():
+    result = score_case(
+        _candidate("x", distance=0.1, severity="high"),
+        query_event_type=None,
+        query_tags=None,
+        query_severity=None,
+    )
+    all_reasons = result.matches + result.differs
+    assert not any(r.startswith("severity:") for r in all_reasons)
+
+
+def test_severity_match_when_query_and_candidate_severity_are_equal():
+    result = score_case(
+        _candidate("x", distance=0.1, severity="high"),
+        query_event_type=None,
+        query_tags=None,
+        query_severity="high",
+    )
+    assert any(m.startswith("severity:") for m in result.matches)
+    assert not any(d.startswith("severity:") for d in result.differs)
+
+
+def test_severity_differs_when_query_and_candidate_severity_are_different():
+    result = score_case(
+        _candidate("x", distance=0.1, severity="high"),
+        query_event_type=None,
+        query_tags=None,
+        query_severity="low",
+    )
+    assert any(d.startswith("severity:") for d in result.differs)
+    assert not any(m.startswith("severity:") for m in result.matches)
+
+
+def test_severity_never_contributes_to_final_score():
+    # Matching vs. differing query_severity must not change final_score at
+    # all -- severity is display-only in matches/differs, never a boost.
+    same = score_case(_candidate("x", distance=0.3, severity="high"), query_severity="high")
+    different = score_case(_candidate("x", distance=0.3, severity="high"), query_severity="low")
+    assert same.final_score == different.final_score
 
 
 def test_matches_and_differs_for_event_type_mismatch():
@@ -224,63 +273,68 @@ def test_matches_and_differs_never_cite_root_cause_or_operator_action_as_a_match
 
 
 # ---------------------------------------------------------------------------
-# symptoms semantic-similarity description (matches/differs requirement #4)
+# overall case-similarity description (matches/differs requirement #4).
+# Renamed from "symptoms similarity" (PR #37 Codex review, P2) -- the score
+# is derived from the whole embedded search text (event_type + symptoms +
+# tags + severity), not symptoms text alone, so the old name and label
+# overclaimed what the metric actually measures.
 # ---------------------------------------------------------------------------
 
 
-def test_symptoms_similarity_label_boundaries():
-    high = SYMPTOMS_SIMILARITY_THRESHOLDS["high"]
-    medium = SYMPTOMS_SIMILARITY_THRESHOLDS["medium"]
-    assert symptoms_similarity_label(high) == "高度語意相似"
-    assert symptoms_similarity_label(high - 1e-9) == "中度語意相似"
-    assert symptoms_similarity_label(medium) == "中度語意相似"
-    assert symptoms_similarity_label(medium - 1e-9) == "低度語意相似"
-    assert symptoms_similarity_label(0.0) == "低度語意相似"
-    assert symptoms_similarity_label(1.0) == "高度語意相似"
+def test_case_similarity_label_boundaries():
+    high = CASE_SIMILARITY_THRESHOLDS["high"]
+    medium = CASE_SIMILARITY_THRESHOLDS["medium"]
+    assert case_similarity_label(high) == "高度語意相似"
+    assert case_similarity_label(high - 1e-9) == "中度語意相似"
+    assert case_similarity_label(medium) == "中度語意相似"
+    assert case_similarity_label(medium - 1e-9) == "低度語意相似"
+    assert case_similarity_label(0.0) == "低度語意相似"
+    assert case_similarity_label(1.0) == "高度語意相似"
 
 
-def test_symptoms_description_never_claims_literal_text_match():
+def test_case_similarity_description_never_claims_literal_text_match():
     result = score_case(_candidate("x", distance=0.0), query_event_type=None, query_tags=None)
-    symptoms_entries = [r for r in (result.matches + result.differs) if r.startswith("symptoms:")]
-    assert len(symptoms_entries) == 1
+    similarity_entries = [r for r in (result.matches + result.differs) if r.startswith("case_similarity:")]
+    assert len(similarity_entries) == 1
     # must describe a semantic-similarity level, never claim exact/literal match
-    assert "非逐字相符" in symptoms_entries[0]
-    assert "完全相符" not in symptoms_entries[0]
+    assert "非逐字相符" in similarity_entries[0]
+    assert "完全相符" not in similarity_entries[0]
 
 
-def test_symptoms_description_goes_to_matches_when_high_or_medium_similarity():
+def test_case_similarity_description_goes_to_matches_when_high_or_medium_similarity():
     # distance=0.1 -> semantic_score=0.9, well above the "medium" floor
     result = score_case(_candidate("x", distance=0.1), query_event_type=None, query_tags=None)
-    assert any(m.startswith("symptoms:") for m in result.matches)
-    assert not any(d.startswith("symptoms:") for d in result.differs)
+    assert any(m.startswith("case_similarity:") for m in result.matches)
+    assert not any(d.startswith("case_similarity:") for d in result.differs)
 
 
-def test_symptoms_description_goes_to_differs_when_low_similarity():
+def test_case_similarity_description_goes_to_differs_when_low_similarity():
     # distance=0.9 -> semantic_score=0.1, below the "medium" floor
     result = score_case(_candidate("x", distance=0.9), query_event_type=None, query_tags=None)
-    assert any(d.startswith("symptoms:") for d in result.differs)
-    assert not any(m.startswith("symptoms:") for m in result.matches)
+    assert any(d.startswith("case_similarity:") for d in result.differs)
+    assert not any(m.startswith("case_similarity:") for m in result.matches)
 
 
-def test_symptoms_description_is_visible_even_when_boosts_inflate_final_score():
-    # Low symptoms semantic similarity (distance=0.9 -> semantic_score=0.1),
-    # but event_type + tags boosts still apply -- the symptoms differs entry
-    # must still surface the weak semantic evidence, not be hidden by the
-    # boosted final_score.
+def test_case_similarity_description_is_visible_even_when_boosts_inflate_final_score():
+    # Low overall semantic similarity (distance=0.9 -> semantic_score=0.1),
+    # but event_type + tags boosts still apply -- the case_similarity differs
+    # entry must still surface the weak semantic evidence, not be hidden by
+    # the boosted final_score.
     result = score_case(
         _candidate("x", distance=0.9, event_type="BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT", tags="a,b"),
         query_event_type="BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT",
         query_tags="a,b",
     )
-    assert any(d.startswith("symptoms:") for d in result.differs)
+    assert any(d.startswith("case_similarity:") for d in result.differs)
     expected = 0.1 + WEIGHTS["event_type_match"] + WEIGHTS["tags_overlap_max"]
     assert abs(result.final_score - expected) < 1e-9
 
 
-def test_symptoms_description_does_not_affect_final_score():
+def test_case_similarity_description_does_not_affect_final_score():
     # Two candidates with identical distance/event_type/tags must have the
-    # exact same final_score regardless of anything symptoms-description-
-    # related -- the description is purely additive to matches/differs.
+    # exact same final_score regardless of anything case_similarity-
+    # description-related -- the description is purely additive to
+    # matches/differs.
     a = score_case(_candidate("a", distance=0.3, tags="x"), query_tags="x")
     b = score_case(_candidate("b", distance=0.3, tags="x"), query_tags="x")
     assert a.final_score == b.final_score

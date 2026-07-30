@@ -551,7 +551,7 @@ function isCaseSearchResult(data: unknown): data is CaseSearchResult {
     typeof d.tags_boost === "number" &&
     typeof d.final_score === "number" &&
     typeof d.confidence === "string" &&
-    typeof d.symptoms_similarity === "string" &&
+    typeof d.case_similarity === "string" &&
     Array.isArray(d.matches) &&
     d.matches.every((m) => typeof m === "string") &&
     Array.isArray(d.differs) &&

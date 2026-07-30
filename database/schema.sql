@@ -135,6 +135,53 @@ CREATE TABLE IF NOT EXISTS case_records (
     updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
+-- Upgrade path for any case_records table created before Sub-step 2B's
+-- case_id NOT NULL UNIQUE requirement and the embedding provenance/hash
+-- columns existed. CREATE TABLE IF NOT EXISTS above is a no-op against an
+-- already-existing table, so an older dev/prod database would otherwise
+-- silently keep case_id nullable/non-unique and be missing these columns
+-- (Codex PR #37 review, P1). Safe to re-run: every ALTER is IF NOT EXISTS
+-- or guarded by an existence check against pg_constraint/information_schema,
+-- and it NEVER deletes or rewrites an existing case_id value to make it
+-- conform -- if any row already violates the new constraint, it raises and
+-- stops so the operator can fix the data deliberately, not have it silently
+-- coerced.
+DO $$
+BEGIN
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedding_provider TEXT;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedding_model TEXT;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedding_dimensions INTEGER;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedding_model_version TEXT;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedding_content_hash TEXT;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMP;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT now();
+
+    IF EXISTS (SELECT 1 FROM case_records WHERE case_id IS NULL) THEN
+        RAISE EXCEPTION 'case_records upgrade aborted: % row(s) have a NULL case_id -- back-fill case_id manually, then re-run schema.sql',
+            (SELECT count(*) FROM case_records WHERE case_id IS NULL);
+    END IF;
+
+    IF EXISTS (
+        SELECT case_id FROM case_records GROUP BY case_id HAVING count(*) > 1
+    ) THEN
+        RAISE EXCEPTION 'case_records upgrade aborted: duplicate case_id value(s) exist -- resolve duplicates manually, then re-run schema.sql';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'case_records' AND column_name = 'case_id' AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE case_records ALTER COLUMN case_id SET NOT NULL;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'case_records_case_id_key'
+    ) THEN
+        ALTER TABLE case_records ADD CONSTRAINT case_records_case_id_key UNIQUE (case_id);
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS analysis_runs (
     id SERIAL PRIMARY KEY,
     dataset_id INTEGER REFERENCES datasets(id),

@@ -472,6 +472,8 @@ updated_at
 
 備註：`embedding_provider`/`embedding_model`/`embedding_dimensions`/`embedding_model_version`/`embedded_at`（Step 11 新增）與 `document_chunks` 的 embedding provenance 欄位設計一致（見 ADR-004：provider 不寫死、記錄 model/version，保留未來重新 embedding 的能力）。`embedding_content_hash` 同樣沿用 `document_chunks.embedding_content_hash` 的欄位命名與計算方式（`app/services/hashing.py` 的 `compute_embedding_content_hash`），讓 `scripts/seed_case_records.py` 能判斷案件搜尋文字是否真的變更，未變更且已有 embedding 時跳過重新呼叫 embedding API。
 
+`case_id` 為 `TEXT NOT NULL UNIQUE`。由於本專案不使用 Alembic，`database/schema.sql` 在 `CREATE TABLE IF NOT EXISTS case_records` 之後另外附了一段可重複執行的 `DO $$ ... $$` 升級區塊：對既有（Step 11 之前建立、`case_id` 當時仍可為 NULL 且無 UNIQUE）的資料庫，會先用 `ALTER TABLE ADD COLUMN IF NOT EXISTS` 補齊本節列出的所有欄位，再檢查現有資料是否已有 NULL 或重複的 `case_id`；只要沒有違規資料就會補上 `NOT NULL` 與 `case_records_case_id_key` UNIQUE constraint，兩者皆用 `IF NOT EXISTS`／`pg_constraint` 檢查過，重複套用 schema.sql 是安全的。若既有資料真的有 NULL 或重複的 `case_id`，這段升級會直接 `RAISE EXCEPTION` 並中止，不會自動刪除或竄改資料，需要先手動修正資料再重新套用。
+
 ### analysis_runs
 
 用途：儲存 rule-based analysis 與 AI analysis 結果。

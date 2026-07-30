@@ -52,7 +52,7 @@ from app.services.case_retrieval import (
     list_case_summaries,
     search_by_text,
 )
-from app.services.case_similarity import ScoredCase, symptoms_similarity_label
+from app.services.case_similarity import ScoredCase, case_similarity_label
 from app.services.embedding_provider import EmbeddingProvider, OpenAIEmbeddingProvider
 from app.services.hashing import compute_document_content_hash
 from app.services.ingestion_rag import READY_STATUS, ingest_pdf_document
@@ -309,7 +309,7 @@ def _scored_case_to_search_result(s: ScoredCase) -> CaseSearchResult:
         tags_boost=s.tags_boost,
         final_score=s.final_score,
         confidence=s.confidence,
-        symptoms_similarity=symptoms_similarity_label(s.semantic_score),
+        case_similarity=case_similarity_label(s.semantic_score),
         matches=s.matches,
         differs=s.differs,
     )

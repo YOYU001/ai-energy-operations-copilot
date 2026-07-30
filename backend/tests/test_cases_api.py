@@ -297,7 +297,7 @@ def test_get_similar_cases_result_excludes_answer_shaped_fields(monkeypatch):
         "tags_boost",
         "final_score",
         "confidence",
-        "symptoms_similarity",
+        "case_similarity",
         "matches",
         "differs",
     }
