@@ -4,7 +4,7 @@
 打造 **AI Energy Operations Copilot MVP v1**，作為 NVIDIA 面試作品集與 AI 工程能力展示專案。
 
 ## Current Phase
-Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → **Step 10：Knowledge Base / RAG（正式版）— 8 個 sub-step 全數完成並正式結案**。Production `documents`/`document_chunks` schema、PDF ingestion pipeline（parsing/OCR/chunking/embedding）、deterministic chunk lifecycle、blue-green cutover、duplicate/failure retry、Documents Backend API（非同步上傳）、production retrieval service、真實 OpenAI regression benchmark（零 regression）、`/documents` 與 `/documents/[id]` frontend 均已完成並經真實 end-to-end 驗證。下一步：**Step 11：Case Similarity**（尚未開始）。
+Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → Step 10：Knowledge Base / RAG（正式版）8 個 sub-step 全數完成並正式結案 → **Step 11：Case Similarity — backend、frontend 均已完成並驗收通過**。Case schema/query layer/similarity scoring/retrieval service、`/cases`、`/cases/{case_id}`、`/cases/{case_id}/similar`、`/cases/search` 四支 API、13 筆合成案例（真實 OpenAI `text-embedding-3-small` embedding）、`/cases` 與 `/cases/[case_id]` frontend 均已完成並經真實瀏覽器 end-to-end 驗證。下一步：**Step 12：AI Assistant / Chat UI**（尚未開始）。
 
 ## Completed
 - 定義 MVP v1 產品範圍、技術棧、Internal Knowledge Only 原則、初版 data schema，以及 Claude Code learning-by-building / 漸進式開發流程。
@@ -40,6 +40,7 @@ Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Documen
 - Step 10 Sub-step 5 — Production Retrieval Service + 真實 OpenAI Regression Benchmark：`query_parser.py`/`retrieval.py`/`retrieval_metrics.py` 正式化（semantic + date/table metadata boost，WEIGHTS 沿用 spike 未重新 tuning）。對 doc1/doc3/doc4 三份真實文件重跑 benchmark，逐題與 spike baseline 完全一致，零 regression（document_scoped hit@1/3/5 = 64%/91%/100%；global hit@3 = 82%，如實記錄未美化）。
 - Step 10 Sub-step 6–7 — Frontend `/documents` 與 `/documents/[id]`：文件列表 + PDF 上傳（processing/ready/failed 狀態 + polling 自動更新）、metadata 與 active chunk viewer（`<details>` compact expandable cards，不暴露 embedding vector）。lint/build 皆通過。
 - Step 10 Sub-step 8 — Final Integration Verification：真實 end-to-end 驗證 new upload／duplicate／same-filename-supersede／failure-then-retry 全數通過（含真實 embedding 失敗後 retry 成功、零 PK collision，透過臨時切換 API key 觸發真實 embedding 失敗，而非用假 provider 模擬）；retrieval smoke test 確認 inactive chunk 不外洩、document filter 與 metadata boost 正常。Step 10 正式結案，全專案 262 個測試通過。
+- Step 11 — Case Similarity（backend + frontend，正式結案）：case schema/query/similarity/retrieval service、4 支 API、`/cases` 與 `/cases/[case_id]` frontend，13 筆合成案例已 seed 真實 OpenAI embedding。357 個測試通過，lint/build 皆過。
 
 ## Important Decisions
 - Frontend：Next.js
@@ -106,9 +107,12 @@ MVP v1 應涵蓋：
 - Step 10 EasyOCR 已提供 `OcrReader`/`EasyOcrReaderProvider` injection interface，但目前只驗證單一 process 場景，尚未驗證 production concurrency（多 request 同時觸發 OCR）下的行為。
 - Step 10 `printed_page_number_map` 尚未由 `/documents/{id}/chunks` API 或 frontend 顯示；已在 Sub-step 7 執行前明確回報此 backend contract gap，決定不擴大 backend scope。
 - Step 10 background ingestion 使用 FastAPI `BackgroundTasks`，適合目前 MVP 規模，但不是 durable job queue：process crash 或 server restart 時，正在執行中的 background task 沒有自動恢復機制（document 會停留在該次 crash 前的最後狀態，需要使用者手動重新上傳觸發 retry）。
+- Step 11 `POST /cases/search` 沒有「相關度過低就回傳空陣列」的 cutoff 邏輯，永遠回傳 `top_k` 筆（只是 confidence 標為低相關），因此 frontend 的「搜尋無結果」EmptyState 在目前 13 筆真實 seed 資料下無法自然觸發（只在 mock API 驗證過畫面本身正確）；未來若要真的支援零結果情境，需在 backend 加低分過濾門檻。
+- Step 11 confidence／symptoms_similarity 的分數門檻（`CONFIDENCE_THRESHOLDS`、`SYMPTOMS_SIMILARITY_THRESHOLDS`）明確標註為 PROVISIONAL，尚未用真實使用情境校準。
+- Step 11 frontend 手機窄螢幕（~752px 寬）已用瀏覽器 responsive mode 驗證過 `/cases` 與 `/cases/[case_id]`（card 排版、長 event_type 換行、matches/differs 標籤、分頁按鈕皆正常），但未涵蓋更窄的手機寬度（如 375px 以下）。
 
 ## Next Step
-**Step 11：Case Similarity**（docs/PROJECT_ALIGNMENT_REVIEW.md §9、docs/DEVELOPMENT_WORKFLOW.md 第 6 節）。**尚未開始規劃或實作。** Step 10（Knowledge Base / RAG 正式版）已於 8 個 sub-step 全數完成後正式結案（Go）：production schema、ingestion pipeline、blue-green lifecycle、Documents Backend API、retrieval service、真實 OpenAI regression benchmark 零 regression、`/documents` 與 `/documents/[id]` frontend 均已完成並經真實 end-to-end 驗證。下一步動作：比照 Step 7–10 的流程，先完成 Step 11 的教學與 implementation plan，經確認後再開始實作。
+**Step 12：AI Assistant / Chat UI**（docs/PROJECT_ALIGNMENT_REVIEW.md §9、docs/DEVELOPMENT_WORKFLOW.md 第 6 節）。**尚未開始規劃或實作。** Step 11（Case Similarity）已完成並驗收通過：backend（schema、query layer、similarity scoring、retrieval service、4 支 API）、13 筆合成案例真實 OpenAI embedding 已 seed 進 dev DB、frontend（`/cases`、`/cases/[case_id]`）均已完成並經真實瀏覽器 end-to-end 驗證，全專案 357 個測試通過。下一步動作：比照 Step 7–11 的流程，先完成 Step 12 的教學與 implementation plan，經確認後再開始實作。
 
 ## Files To Read Next Time
 每次一定要先讀：

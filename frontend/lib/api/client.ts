@@ -5,6 +5,10 @@ import type {
   AnomalyResult,
   BatteryDischargeAnalysisResult,
   BatteryDischargeEvidence,
+  CaseDetail,
+  CasesPage,
+  CaseSearchResult,
+  CaseSummary,
   ChunkSummary,
   ColumnStatistics,
   DatasetSummary,
@@ -449,6 +453,142 @@ export async function getDocumentChunks(
   if (!Array.isArray(data) || !data.every(isChunkSummary)) {
     throw new Error(
       `API response schema mismatch: /documents/${documentId}/chunks did not return ChunkSummary[]`,
+    );
+  }
+  return data;
+}
+
+function isCaseSummary(data: unknown): data is CaseSummary {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.case_id === "string" &&
+    isNullableString(d.event_type) &&
+    isNullableString(d.symptoms) &&
+    isNullableString(d.tags) &&
+    isNullableString(d.severity) &&
+    typeof d.created_at === "string" &&
+    typeof d.updated_at === "string"
+  );
+}
+
+function isCasesPage(data: unknown): data is CasesPage {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.total === "number" &&
+    typeof d.limit === "number" &&
+    typeof d.offset === "number" &&
+    Array.isArray(d.items) &&
+    d.items.every(isCaseSummary)
+  );
+}
+
+export async function getCases(
+  limit?: number,
+  offset?: number,
+): Promise<CasesPage> {
+  const params = new URLSearchParams();
+  if (limit !== undefined) params.set("limit", String(limit));
+  if (offset !== undefined) params.set("offset", String(offset));
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  const data = await apiFetch(`/cases${query}`);
+  if (!isCasesPage(data)) {
+    throw new Error(
+      "API response schema mismatch: /cases did not return CasesPage",
+    );
+  }
+  return data;
+}
+
+function isCaseDetail(data: unknown): data is CaseDetail {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.case_id === "string" &&
+    isNullableString(d.site_id) &&
+    isNullableString(d.event_time) &&
+    isNullableString(d.event_type) &&
+    isNullableString(d.symptoms) &&
+    isNullableString(d.root_cause) &&
+    isNullableString(d.operator_action) &&
+    isNullableString(d.resolution_result) &&
+    isNullableString(d.severity) &&
+    isNullableString(d.tags) &&
+    isNullableNumber(d.related_dataset_id) &&
+    isNullableString(d.related_time_range) &&
+    isNullableString(d.embedding_provider) &&
+    isNullableString(d.embedding_model) &&
+    isNullableNumber(d.embedding_dimensions) &&
+    isNullableString(d.embedding_model_version) &&
+    isNullableString(d.embedded_at) &&
+    typeof d.created_at === "string" &&
+    typeof d.updated_at === "string"
+  );
+}
+
+export async function getCase(caseId: string): Promise<CaseDetail> {
+  const data = await apiFetch(`/cases/${encodeURIComponent(caseId)}`);
+  if (!isCaseDetail(data)) {
+    throw new Error(
+      `API response schema mismatch: /cases/${caseId} did not return CaseDetail`,
+    );
+  }
+  return data;
+}
+
+function isCaseSearchResult(data: unknown): data is CaseSearchResult {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.case_id === "string" &&
+    isNullableString(d.event_type) &&
+    isNullableString(d.symptoms) &&
+    isNullableString(d.tags) &&
+    isNullableString(d.severity) &&
+    typeof d.semantic_score === "number" &&
+    typeof d.event_type_match === "boolean" &&
+    typeof d.tags_boost === "number" &&
+    typeof d.final_score === "number" &&
+    typeof d.confidence === "string" &&
+    typeof d.case_similarity === "string" &&
+    Array.isArray(d.matches) &&
+    d.matches.every((m) => typeof m === "string") &&
+    Array.isArray(d.differs) &&
+    d.differs.every((m) => typeof m === "string")
+  );
+}
+
+export async function getSimilarCases(
+  caseId: string,
+  topK?: number,
+): Promise<CaseSearchResult[]> {
+  const query = topK !== undefined ? `?top_k=${topK}` : "";
+  const data = await apiFetch(
+    `/cases/${encodeURIComponent(caseId)}/similar${query}`,
+  );
+  if (!Array.isArray(data) || !data.every(isCaseSearchResult)) {
+    throw new Error(
+      `API response schema mismatch: /cases/${caseId}/similar did not return CaseSearchResult[]`,
+    );
+  }
+  return data;
+}
+
+export async function searchCases(payload: {
+  query: string;
+  event_type?: string | null;
+  tags?: string | null;
+  top_k?: number;
+}): Promise<CaseSearchResult[]> {
+  const data = await apiFetch("/cases/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!Array.isArray(data) || !data.every(isCaseSearchResult)) {
+    throw new Error(
+      "API response schema mismatch: /cases/search did not return CaseSearchResult[]",
     );
   }
   return data;

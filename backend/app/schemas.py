@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class IngestWarning(BaseModel):
@@ -167,3 +167,83 @@ class ChunkSummary(BaseModel):
     embedding_model_version: Optional[str] = None
     embedded_at: Optional[datetime] = None
     is_active: bool
+
+
+class CaseSummary(BaseModel):
+    """GET /cases list item -- deliberately excludes answer-shaped fields
+    (root_cause/operator_action/resolution_result) so browsing the list
+    never leaks a case's resolution before the user opens its detail."""
+
+    case_id: str
+    event_type: Optional[str] = None
+    symptoms: Optional[str] = None
+    tags: Optional[str] = None
+    severity: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CasesPage(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[CaseSummary]
+
+
+class CaseDetail(BaseModel):
+    """GET /cases/{case_id} -- full record, including answer-shaped fields
+    and provenance. Never includes the raw embedding vector."""
+
+    case_id: str
+    site_id: Optional[str] = None
+    event_time: Optional[datetime] = None
+    event_type: Optional[str] = None
+    symptoms: Optional[str] = None
+    root_cause: Optional[str] = None
+    operator_action: Optional[str] = None
+    resolution_result: Optional[str] = None
+    severity: Optional[str] = None
+    tags: Optional[str] = None
+    related_dataset_id: Optional[int] = None
+    related_time_range: Optional[str] = None
+    embedding_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
+    embedding_dimensions: Optional[int] = None
+    embedding_model_version: Optional[str] = None
+    embedded_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CaseSearchRequest(BaseModel):
+    query: str
+    event_type: Optional[str] = None
+    tags: Optional[str] = None
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+class CaseSearchResult(BaseModel):
+    """Shared response item for GET /cases/{case_id}/similar and
+    POST /cases/search -- backend returns fully-computed scoring, never a
+    raw embedding vector or answer-shaped fields (root_cause/
+    operator_action/resolution_result); those are reserved for
+    GET /cases/{case_id}."""
+
+    case_id: str
+    event_type: Optional[str] = None
+    symptoms: Optional[str] = None
+    tags: Optional[str] = None
+    severity: Optional[str] = None
+    semantic_score: float
+    event_type_match: bool
+    tags_boost: float
+    final_score: float
+    confidence: str
+    # Composite semantic-similarity description (event_type + symptoms + tags
+    # + severity combined -- see build_case_search_text in
+    # scripts/seed_case_records.py), NOT a symptoms-only comparison. Renamed
+    # from symptoms_similarity (PR #37 Codex review, P2) -- the old name
+    # implied it isolated symptom text similarity, which it never did.
+    case_similarity: str
+    matches: list[str]
+    differs: list[str]

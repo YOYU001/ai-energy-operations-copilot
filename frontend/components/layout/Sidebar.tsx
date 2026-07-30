@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: "/datasets", label: "Datasets" },
   { href: "/documents", label: "Documents" },
   { href: "/analysis", label: "Analysis" },
+  { href: "/cases", label: "Case Similarity" },
   { href: "/assistant", label: "AI Assistant" },
 ];
 

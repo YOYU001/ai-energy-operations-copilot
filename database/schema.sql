@@ -93,10 +93,20 @@ CREATE TABLE IF NOT EXISTS energy_timeseries (
     battery_available_capacity_kwh NUMERIC
 );
 
--- embedding dimension (1536) is a placeholder pending final embedding model choice (see Step 9: Knowledge Base / RAG)
+-- embedding dimension (1536) matches OpenAI text-embedding-3-small, validated
+-- by the Step 6 RAG Feasibility Spike and already used in production by
+-- document_chunks (Step 10) -- no longer a placeholder. Provenance and
+-- timestamp columns mirror document_chunks' precedent (ADR-004: provider
+-- not hardcoded, model/version recorded per row so a future re-embedding
+-- pass can tell which rows are stale), added for Step 11 (Case Similarity).
 CREATE TABLE IF NOT EXISTS case_records (
     id SERIAL PRIMARY KEY,
-    case_id TEXT,
+    -- Stable business identifier for a case (Step 11 Sub-step 2B): required
+    -- and unique so upsert_case_record can rely on a real DB-level
+    -- ON CONFLICT (case_id) for atomic upsert, instead of an application-
+    -- level SELECT-then-branch race. UNIQUE alone would still allow
+    -- multiple NULLs, hence NOT NULL as well.
+    case_id TEXT NOT NULL UNIQUE,
     site_id TEXT,
     event_time TIMESTAMP,
     event_type TEXT,
@@ -108,8 +118,69 @@ CREATE TABLE IF NOT EXISTS case_records (
     tags TEXT,
     related_dataset_id INTEGER REFERENCES datasets(id),
     related_time_range TEXT,
-    embedding vector(1536)
+    embedding vector(1536),
+    embedding_provider TEXT,
+    embedding_model TEXT,
+    embedding_dimensions INTEGER,
+    embedding_model_version TEXT,
+    -- Hash of exactly the text that was embedded (same field name and
+    -- purpose as document_chunks.embedding_content_hash, computed by
+    -- app/services/hashing.py's compute_embedding_content_hash). Lets
+    -- scripts/seed_case_records.py detect an unchanged case and skip
+    -- re-calling the embedding API on re-run, instead of re-embedding
+    -- every case every time (fix: avoid redundant case embedding requests).
+    embedding_content_hash TEXT,
+    embedded_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
+
+-- Upgrade path for any case_records table created before Sub-step 2B's
+-- case_id NOT NULL UNIQUE requirement and the embedding provenance/hash
+-- columns existed. CREATE TABLE IF NOT EXISTS above is a no-op against an
+-- already-existing table, so an older dev/prod database would otherwise
+-- silently keep case_id nullable/non-unique and be missing these columns
+-- (Codex PR #37 review, P1). Safe to re-run: every ALTER is IF NOT EXISTS
+-- or guarded by an existence check against pg_constraint/information_schema,
+-- and it NEVER deletes or rewrites an existing case_id value to make it
+-- conform -- if any row already violates the new constraint, it raises and
+-- stops so the operator can fix the data deliberately, not have it silently
+-- coerced.
+DO $$
+BEGIN
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedding_provider TEXT;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedding_model TEXT;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedding_dimensions INTEGER;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedding_model_version TEXT;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedding_content_hash TEXT;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMP;
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();
+    ALTER TABLE case_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT now();
+
+    IF EXISTS (SELECT 1 FROM case_records WHERE case_id IS NULL) THEN
+        RAISE EXCEPTION 'case_records upgrade aborted: % row(s) have a NULL case_id -- back-fill case_id manually, then re-run schema.sql',
+            (SELECT count(*) FROM case_records WHERE case_id IS NULL);
+    END IF;
+
+    IF EXISTS (
+        SELECT case_id FROM case_records GROUP BY case_id HAVING count(*) > 1
+    ) THEN
+        RAISE EXCEPTION 'case_records upgrade aborted: duplicate case_id value(s) exist -- resolve duplicates manually, then re-run schema.sql';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'case_records' AND column_name = 'case_id' AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE case_records ALTER COLUMN case_id SET NOT NULL;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'case_records_case_id_key'
+    ) THEN
+        ALTER TABLE case_records ADD CONSTRAINT case_records_case_id_key UNIQUE (case_id);
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS analysis_runs (
     id SERIAL PRIMARY KEY,

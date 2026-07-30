@@ -1,3 +1,28 @@
+import math
+from datetime import datetime, timezone
+
+
+def _parse_vector(value):
+    """Inverse of str(list[float]) -- case_records_queries.py stores/queries
+    embeddings as str(vector) (see upsert_case_record/fetch_candidate_cases),
+    so the fake must parse that same text format back into floats to compute
+    a real cosine distance for test candidates."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    return [float(x) for x in value.strip("[]").split(",") if x.strip()]
+
+
+def _cosine_distance(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0 or norm_b == 0:
+        return 1.0
+    return 1.0 - dot / (norm_a * norm_b)
+
+
 class FakeResult:
     """Mimics the subset of SQLAlchemy's CursorResult used by our query functions."""
 
@@ -12,6 +37,10 @@ class FakeResult:
 
     def first(self):
         return self._rows[0] if self._rows else None
+
+    def scalar_one(self):
+        # First column of the first row -- e.g. a `RETURNING id` query's result.
+        return next(iter(self._rows[0].values()))
 
 
 class FakeConnection:
@@ -263,3 +292,109 @@ class FakeRagConnection:
     def rollback(self):
         while self._undo_log:
             self._undo_log.pop()()
+
+
+class FakeCaseRecordsConnection:
+    """In-memory stand-in for the subset of a SQLAlchemy Connection used by
+    case_records_queries.py (Step 11 Sub-step 2A/2B).
+
+    Keyed by case_id, mirroring the real case_records_case_id_key UNIQUE
+    constraint (Sub-step 2B) -- upsert_case_record's single `INSERT ... ON
+    CONFLICT (case_id) DO UPDATE ...` statement is emulated here as one
+    branch that inserts if case_id is new, or updates in place (preserving
+    the existing id) if it already exists, matching the real atomic
+    upsert's observable behavior for a single fake connection.
+    """
+
+    def __init__(self):
+        self.rows_by_case_id: dict[str, dict] = {}
+        self._next_id = 1
+        self.committed = False
+        self.rolled_back = False
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+
+        if "SELECT * FROM case_records WHERE case_id = ANY" in sql:
+            wanted = set(params.get("ids", []))
+            rows = [dict(r) for cid, r in self.rows_by_case_id.items() if cid in wanted]
+            return FakeExecResult(rows=rows)
+
+        if "SELECT * FROM case_records WHERE case_id" in sql:
+            row = self.rows_by_case_id.get(params["case_id"])
+            return FakeExecResult(rows=[dict(row)] if row else [])
+
+        if "SELECT * FROM case_records WHERE id" in sql:
+            row = next((r for r in self.rows_by_case_id.values() if r["id"] == params["id"]), None)
+            return FakeExecResult(rows=[dict(row)] if row else [])
+
+        if "INSERT INTO case_records" in sql and "ON CONFLICT (case_id)" in sql:
+            case_id = params["case_id"]
+            existing = self.rows_by_case_id.get(case_id)
+            has_new_embedding = params.get("embedding") is not None
+
+            now = datetime.now(timezone.utc)
+
+            if existing is None:
+                new_id = self._next_id
+                self._next_id += 1
+                row = dict(params)
+                row["id"] = new_id
+                row["embedded_at"] = now if has_new_embedding else None
+                row["created_at"] = now
+                row["updated_at"] = now
+                self.rows_by_case_id[case_id] = row
+                return FakeExecResult(scalar=new_id)
+
+            row = existing
+            for key, value in params.items():
+                if key == "embedding" and not has_new_embedding:
+                    continue  # EXCLUDED.embedding IS NULL -> preserve case_records.embedding
+                if key in (
+                    "embedding_provider",
+                    "embedding_model",
+                    "embedding_dimensions",
+                    "embedding_model_version",
+                    "embedding_content_hash",
+                ) and not has_new_embedding:
+                    continue
+                row[key] = value
+            if has_new_embedding:
+                row["embedded_at"] = now
+            row["updated_at"] = now
+            return FakeExecResult(scalar=row["id"])
+
+        if "SELECT COUNT(*) AS total FROM case_records" in sql:
+            return FakeExecResult(rows=[{"total": len(self.rows_by_case_id)}])
+
+        if "ORDER BY event_time DESC" in sql:
+            rows = sorted(self.rows_by_case_id.values(), key=lambda r: r["id"], reverse=True)
+            if "limit" in params:
+                offset = params.get("offset", 0)
+                rows = rows[offset : offset + params["limit"]]
+            return FakeExecResult(rows=[dict(r) for r in rows])
+
+        if "FROM case_records" in sql and "distance" in sql:
+            # Candidate similarity query -- real vector math (Step 11
+            # Sub-step 3's case_retrieval.py orchestration needs genuine
+            # ranking/self-exclusion/top_k behavior to be testable, not just
+            # SQL shape).
+            query_vector = _parse_vector(params.get("qv"))
+            pool_size = params.get("k", 30)
+            candidates = []
+            for row in self.rows_by_case_id.values():
+                if row.get("embedding") is None:
+                    continue
+                distance = _cosine_distance(query_vector, _parse_vector(row["embedding"]))
+                candidates.append({**row, "distance": distance})
+            candidates.sort(key=lambda r: r["distance"])
+            return FakeExecResult(rows=[dict(c) for c in candidates[:pool_size]])
+
+        raise AssertionError(f"FakeCaseRecordsConnection: unrecognized SQL: {sql}")
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
