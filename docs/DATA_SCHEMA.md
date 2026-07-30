@@ -464,12 +464,13 @@ embedding_provider
 embedding_model
 embedding_dimensions
 embedding_model_version
+embedding_content_hash
 embedded_at
 created_at
 updated_at
 ```
 
-備註：`embedding_provider`/`embedding_model`/`embedding_dimensions`/`embedding_model_version`/`embedded_at`（Step 11 新增）與 `document_chunks` 的 embedding provenance 欄位設計一致（見 ADR-004：provider 不寫死、記錄 model/version，保留未來重新 embedding 的能力）。
+備註：`embedding_provider`/`embedding_model`/`embedding_dimensions`/`embedding_model_version`/`embedded_at`（Step 11 新增）與 `document_chunks` 的 embedding provenance 欄位設計一致（見 ADR-004：provider 不寫死、記錄 model/version，保留未來重新 embedding 的能力）。`embedding_content_hash` 同樣沿用 `document_chunks.embedding_content_hash` 的欄位命名與計算方式（`app/services/hashing.py` 的 `compute_embedding_content_hash`），讓 `scripts/seed_case_records.py` 能判斷案件搜尋文字是否真的變更，未變更且已有 embedding 時跳過重新呼叫 embedding API。
 
 ### analysis_runs
 

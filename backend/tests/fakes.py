@@ -316,6 +316,11 @@ class FakeCaseRecordsConnection:
         sql = str(statement)
         params = params or {}
 
+        if "SELECT * FROM case_records WHERE case_id = ANY" in sql:
+            wanted = set(params.get("ids", []))
+            rows = [dict(r) for cid, r in self.rows_by_case_id.items() if cid in wanted]
+            return FakeExecResult(rows=rows)
+
         if "SELECT * FROM case_records WHERE case_id" in sql:
             row = self.rows_by_case_id.get(params["case_id"])
             return FakeExecResult(rows=[dict(row)] if row else [])
@@ -346,7 +351,13 @@ class FakeCaseRecordsConnection:
             for key, value in params.items():
                 if key == "embedding" and not has_new_embedding:
                     continue  # EXCLUDED.embedding IS NULL -> preserve case_records.embedding
-                if key in ("embedding_provider", "embedding_model", "embedding_dimensions", "embedding_model_version") and not has_new_embedding:
+                if key in (
+                    "embedding_provider",
+                    "embedding_model",
+                    "embedding_dimensions",
+                    "embedding_model_version",
+                    "embedding_content_hash",
+                ) and not has_new_embedding:
                     continue
                 row[key] = value
             if has_new_embedding:

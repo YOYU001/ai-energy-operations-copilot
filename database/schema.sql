@@ -123,6 +123,13 @@ CREATE TABLE IF NOT EXISTS case_records (
     embedding_model TEXT,
     embedding_dimensions INTEGER,
     embedding_model_version TEXT,
+    -- Hash of exactly the text that was embedded (same field name and
+    -- purpose as document_chunks.embedding_content_hash, computed by
+    -- app/services/hashing.py's compute_embedding_content_hash). Lets
+    -- scripts/seed_case_records.py detect an unchanged case and skip
+    -- re-calling the embedding API on re-run, instead of re-embedding
+    -- every case every time (fix: avoid redundant case embedding requests).
+    embedding_content_hash TEXT,
     embedded_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT now(),
     updated_at TIMESTAMP NOT NULL DEFAULT now()

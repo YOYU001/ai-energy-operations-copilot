@@ -14,6 +14,7 @@ from app.case_records_queries import (
     fetch_candidate_cases,
     get_case_by_case_id,
     get_case_by_id,
+    get_cases_by_case_ids,
     list_cases,
     upsert_case_record,
 )
@@ -96,6 +97,35 @@ def test_upsert_without_embedding_does_not_erase_existing_embedding():
     assert row["embedding"] == "[0.1, 0.2]"
     assert row["embedding_provider"] == "openai"
     assert row["symptoms"] == "structured field update only"
+
+
+def test_upsert_with_embedding_content_hash_stores_it_alongside_embedding():
+    conn = FakeCaseRecordsConnection()
+    upsert_case_record(
+        conn,
+        **_kwargs(
+            embedding=[0.1, 0.2, 0.3],
+            embedding_provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_dimensions=3,
+            embedding_model_version="v1",
+            embedding_content_hash="hash-1",
+        ),
+    )
+    row = get_case_by_case_id(conn, "case-0001")
+    assert row["embedding_content_hash"] == "hash-1"
+
+
+def test_upsert_without_embedding_does_not_erase_existing_embedding_content_hash():
+    conn = FakeCaseRecordsConnection()
+    upsert_case_record(
+        conn,
+        **_kwargs(embedding=[0.1, 0.2], embedding_provider="openai", embedding_content_hash="hash-1"),
+    )
+    upsert_case_record(conn, **_kwargs(symptoms="structured field update only"))
+
+    row = get_case_by_case_id(conn, "case-0001")
+    assert row["embedding_content_hash"] == "hash-1"
 
 
 def test_upsert_can_add_embedding_to_a_row_that_had_none_before():
@@ -228,3 +258,36 @@ def test_fetch_candidate_cases_parameterizes_query_vector_not_string_interpolate
     assert ":qv" in str(statement)
     assert str(query_vector) not in str(statement)
     assert params["qv"] == str(query_vector)
+
+
+# ---------------------------------------------------------------------------
+# get_cases_by_case_ids -- bulk fetch used by scripts/seed_case_records.py's
+# embedding-idempotency check (fix: avoid redundant case embedding requests)
+# ---------------------------------------------------------------------------
+
+
+def test_get_cases_by_case_ids_returns_only_matching_existing_rows():
+    conn = FakeCaseRecordsConnection()
+    upsert_case_record(conn, **_kwargs(case_id="case-0001"))
+    upsert_case_record(conn, **_kwargs(case_id="case-0002"))
+    upsert_case_record(conn, **_kwargs(case_id="case-0003"))
+
+    result = get_cases_by_case_ids(conn, ["case-0001", "case-0003", "case-missing"])
+
+    assert set(result.keys()) == {"case-0001", "case-0003"}
+    assert result["case-0001"]["case_id"] == "case-0001"
+
+
+def test_get_cases_by_case_ids_returns_empty_dict_for_empty_input():
+    conn = FakeCaseRecordsConnection()
+    assert get_cases_by_case_ids(conn, []) == {}
+
+
+def test_get_cases_by_case_ids_uses_any_parameterized_query_not_one_per_id():
+    conn = FakeConnection(rows=[])
+    get_cases_by_case_ids(conn, ["case-a", "case-b"])
+
+    assert len(conn.executed) == 1  # single batch query, not one SELECT per case_id
+    statement, params = conn.executed[-1]
+    assert "= ANY(:ids)" in str(statement)
+    assert params["ids"] == ["case-a", "case-b"]

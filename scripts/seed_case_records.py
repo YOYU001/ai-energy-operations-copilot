@@ -14,10 +14,13 @@ Dry-run mode makes zero DB connections and zero embedding-provider calls --
 it only loads+validates the sample file and reports what a real run would
 process. Normal mode requires DATABASE_URL and a real embedding provider
 (reuses app.services.embedding_provider.OpenAIEmbeddingProvider -- no second
-OpenAI client is built here); this sub-step implements and unit-tests normal
-mode against a fake connection/fake provider only. It is NOT run against the
-real dev DB or the real OpenAI API in this sub-step -- see the Sub-step 2B
-report for why that's deliberately deferred.
+OpenAI client is built here).
+
+run_seed is idempotent at the embedding-cost level, not just the row level:
+re-running it with unchanged sample data makes zero embedding API calls
+(compares each case's embedding_content_hash against what's already stored),
+only re-embedding cases that are new, never got an embedding written, or
+whose search text actually changed. See _needs_embedding below.
 """
 
 from __future__ import annotations
@@ -43,8 +46,9 @@ _BACKEND_DIR = REPO_ROOT / "backend"
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
-from app.case_records_queries import upsert_case_record  # noqa: E402
+from app.case_records_queries import get_cases_by_case_ids, upsert_case_record  # noqa: E402
 from app.services.embedding_provider import EmbeddingProvider  # noqa: E402
+from app.services.hashing import compute_embedding_content_hash  # noqa: E402
 
 REQUIRED_CASE_FIELDS = (
     "case_id",
@@ -122,6 +126,23 @@ def plan_seed(cases: list[dict]) -> list[SeedPlanItem]:
 class SeedResult:
     case_id: str
     id: int
+    was_embedded: bool = False
+
+
+def _needs_embedding(case: dict, content_hash: str, existing_by_case_id: dict[str, dict]) -> bool:
+    """A case needs a fresh embedding call if it's new, if a prior run never
+    got as far as writing an embedding for it (e.g. a crash mid-run), or if
+    its search text actually changed since the stored embedding_content_hash
+    was written. Deliberately NOT just "does a row already exist" -- that
+    alone would silently skip re-embedding a case whose symptoms/event_type/
+    tags/severity text was edited after the first seed.
+    """
+    existing = existing_by_case_id.get(case["case_id"])
+    if existing is None:
+        return True
+    if existing.get("embedding") is None:
+        return True
+    return existing.get("embedding_content_hash") != content_hash
 
 
 def run_seed(
@@ -130,42 +151,53 @@ def run_seed(
     embedding_provider: EmbeddingProvider,
     embed_batch_size: int = DEFAULT_EMBED_BATCH_SIZE,
 ) -> list[SeedResult]:
-    """Embed and upsert every case. Batches embedding calls (same batching
-    convention as app/services/ingestion_rag.py); commits once at the end
-    since seeding writes plain rows with no blue-green lifecycle/cutover
-    concerns (case_records has no is_active column).
+    """Embed and upsert every case, skipping the embedding API call for any
+    case whose search text is unchanged and already has a stored embedding
+    (fix: avoid redundant case embedding requests -- mirrors document_chunks'
+    embedding_content_hash precedent, see app/services/hashing.py). Batches
+    embedding calls (same batching convention as app/services/ingestion_rag.py);
+    commits once at the end since seeding writes plain rows with no
+    blue-green lifecycle/cutover concerns (case_records has no is_active
+    column).
     """
-    items = plan_seed(cases)
-    results: list[SeedResult] = []
+    content_hash_by_case_id = {case["case_id"]: compute_embedding_content_hash(build_case_search_text(case)) for case in cases}
+    existing_by_case_id = get_cases_by_case_ids(conn, list(content_hash_by_case_id.keys()))
 
-    for i in range(0, len(items), embed_batch_size):
-        batch_cases = cases[i : i + embed_batch_size]
-        batch_items = items[i : i + embed_batch_size]
-        texts = [item.search_text for item in batch_items]
+    to_embed = [case for case in cases if _needs_embedding(case, content_hash_by_case_id[case["case_id"]], existing_by_case_id)]
+
+    embedded_by_case_id = {}
+    for i in range(0, len(to_embed), embed_batch_size):
+        batch_cases = to_embed[i : i + embed_batch_size]
+        texts = [build_case_search_text(case) for case in batch_cases]
         batch_result = embedding_provider.embed_batch(texts)
-
         for case, embedded in zip(batch_cases, batch_result.results):
-            row_id = upsert_case_record(
-                conn,
-                case_id=case["case_id"],
-                site_id=case.get("site_id"),
-                event_time=case.get("event_time"),
-                event_type=case.get("event_type"),
-                symptoms=case.get("symptoms"),
-                root_cause=case.get("root_cause"),
-                operator_action=case.get("operator_action"),
-                resolution_result=case.get("resolution_result"),
-                severity=case.get("severity"),
-                tags=case.get("tags"),
-                related_dataset_id=case.get("related_dataset_id"),
-                related_time_range=case.get("related_time_range"),
-                embedding=embedded.vector,
-                embedding_provider=embedded.provider,
-                embedding_model=embedded.model,
-                embedding_dimensions=embedded.dimensions,
-                embedding_model_version=embedded.model_version,
-            )
-            results.append(SeedResult(case_id=case["case_id"], id=row_id))
+            embedded_by_case_id[case["case_id"]] = embedded
+
+    results: list[SeedResult] = []
+    for case in cases:
+        embedded = embedded_by_case_id.get(case["case_id"])
+        row_id = upsert_case_record(
+            conn,
+            case_id=case["case_id"],
+            site_id=case.get("site_id"),
+            event_time=case.get("event_time"),
+            event_type=case.get("event_type"),
+            symptoms=case.get("symptoms"),
+            root_cause=case.get("root_cause"),
+            operator_action=case.get("operator_action"),
+            resolution_result=case.get("resolution_result"),
+            severity=case.get("severity"),
+            tags=case.get("tags"),
+            related_dataset_id=case.get("related_dataset_id"),
+            related_time_range=case.get("related_time_range"),
+            embedding=embedded.vector if embedded else None,
+            embedding_provider=embedded.provider if embedded else None,
+            embedding_model=embedded.model if embedded else None,
+            embedding_dimensions=embedded.dimensions if embedded else None,
+            embedding_model_version=embedded.model_version if embedded else None,
+            embedding_content_hash=content_hash_by_case_id[case["case_id"]] if embedded else None,
+        )
+        results.append(SeedResult(case_id=case["case_id"], id=row_id, was_embedded=embedded is not None))
 
     conn.commit()
     return results
@@ -199,18 +231,17 @@ def main() -> None:
         print_dry_run_summary(items)
         return
 
-    # Normal mode: real DB + real embedding provider. Deliberately NOT
-    # executed or exercised in Sub-step 2B -- both a real OpenAI API call and
-    # a real dev DB write are out of scope for this round (see the Sub-step
-    # 2B report). Imports are local so `--dry-run` never needs
-    # OPENAI_API_KEY or DATABASE_URL to be set.
+    # Normal mode: real DB + real embedding provider. Imports are local so
+    # `--dry-run` never needs OPENAI_API_KEY or DATABASE_URL to be set.
     from app.db import get_connection
     from app.services.embedding_provider import OpenAIEmbeddingProvider
 
     cases = load_sample_cases(args.sample_path)
     with get_connection() as conn:
         results = run_seed(conn, cases, OpenAIEmbeddingProvider())
-    print(f"Seeded {len(results)} case(s).")
+    embedded_count = sum(1 for r in results if r.was_embedded)
+    skipped_count = len(results) - embedded_count
+    print(f"Seeded {len(results)} case(s): {embedded_count} embedded, {skipped_count} skipped (unchanged).")
 
 
 if __name__ == "__main__":

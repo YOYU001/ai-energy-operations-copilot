@@ -42,6 +42,22 @@ def get_case_by_id(conn, id: int):
     return dict(row) if row else None
 
 
+def get_cases_by_case_ids(conn, case_ids: list[str]) -> dict[str, dict]:
+    """Batch-fetch existing case_records rows for these case_ids, keyed by
+    case_id. Used by scripts/seed_case_records.py to decide, per case,
+    whether it already has a matching embedding_content_hash (skip) --
+    one query instead of one SELECT per case_id (N+1), matching
+    document_chunks_queries.get_existing_chunk_hashes's precedent.
+    """
+    if not case_ids:
+        return {}
+    rows = conn.execute(
+        text("SELECT * FROM case_records WHERE case_id = ANY(:ids)"),
+        {"ids": case_ids},
+    ).mappings().all()
+    return {row["case_id"]: dict(row) for row in rows}
+
+
 def list_cases(conn, limit: int, offset: int) -> tuple[int, list[dict]]:
     """Return (total, items) for a page of case_records, newest event first.
 
@@ -82,6 +98,7 @@ def upsert_case_record(
     embedding_model: str | None = None,
     embedding_dimensions: int | None = None,
     embedding_model_version: str | None = None,
+    embedding_content_hash: str | None = None,
 ) -> int:
     """Atomically insert a new case_records row, or update the existing row
     with this case_id if one already exists (via `ON CONFLICT (case_id) DO
@@ -89,12 +106,15 @@ def upsert_case_record(
     Returns the row's id either way.
 
     Structured fields (site_id, event_time, ... related_time_range) always
-    take the newly-passed values on conflict. embedding and its provenance
-    columns only update when a non-None embedding is passed -- calling this
-    again with embedding=None (e.g. to update structured fields only) must
-    NOT erase an existing embedding, its provenance, or its embedded_at
-    timestamp; EXCLUDED.embedding IS NULL is used to detect that case and
-    fall back to the existing row's values instead of overwriting them.
+    take the newly-passed values on conflict. embedding, its provenance
+    columns, and embedding_content_hash only update when a non-None
+    embedding is passed -- calling this again with embedding=None (e.g. to
+    update structured fields only, or because the caller decided this
+    case's search text is unchanged and skipped re-embedding) must NOT
+    erase an existing embedding, its provenance, its hash, or its
+    embedded_at timestamp; EXCLUDED.embedding IS NULL is used to detect
+    that case and fall back to the existing row's values instead of
+    overwriting them.
     """
     embedding_param = str(embedding) if embedding is not None else None
 
@@ -116,6 +136,7 @@ def upsert_case_record(
         "embedding_model": embedding_model,
         "embedding_dimensions": embedding_dimensions,
         "embedding_model_version": embedding_model_version,
+        "embedding_content_hash": embedding_content_hash,
     }
 
     result = conn.execute(
@@ -126,13 +147,15 @@ def upsert_case_record(
                 operator_action, resolution_result, severity, tags,
                 related_dataset_id, related_time_range,
                 embedding, embedding_provider, embedding_model,
-                embedding_dimensions, embedding_model_version, embedded_at
+                embedding_dimensions, embedding_model_version,
+                embedding_content_hash, embedded_at
             ) VALUES (
                 :case_id, :site_id, :event_time, :event_type, :symptoms, :root_cause,
                 :operator_action, :resolution_result, :severity, :tags,
                 :related_dataset_id, :related_time_range,
                 CAST(:embedding AS vector), :embedding_provider, :embedding_model,
                 :embedding_dimensions, :embedding_model_version,
+                :embedding_content_hash,
                 CASE WHEN :embedding IS NULL THEN NULL ELSE now() END
             )
             ON CONFLICT (case_id) DO UPDATE SET
@@ -152,6 +175,7 @@ def upsert_case_record(
                 embedding_model = CASE WHEN EXCLUDED.embedding IS NULL THEN case_records.embedding_model ELSE EXCLUDED.embedding_model END,
                 embedding_dimensions = CASE WHEN EXCLUDED.embedding IS NULL THEN case_records.embedding_dimensions ELSE EXCLUDED.embedding_dimensions END,
                 embedding_model_version = CASE WHEN EXCLUDED.embedding IS NULL THEN case_records.embedding_model_version ELSE EXCLUDED.embedding_model_version END,
+                embedding_content_hash = CASE WHEN EXCLUDED.embedding IS NULL THEN case_records.embedding_content_hash ELSE EXCLUDED.embedding_content_hash END,
                 embedded_at = CASE WHEN EXCLUDED.embedding IS NULL THEN case_records.embedded_at ELSE now() END,
                 updated_at = now()
             RETURNING id
