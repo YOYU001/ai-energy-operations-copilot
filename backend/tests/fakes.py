@@ -26,8 +26,12 @@ def _cosine_distance(a, b):
 class FakeResult:
     """Mimics the subset of SQLAlchemy's CursorResult used by our query functions."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, rowcount=None):
         self._rows = rows
+        # Defaults to len(rows) -- fine for the common RETURNING/SELECT
+        # cases; callers asserting a specific UPDATE/DELETE rowcount
+        # distinct from returned row count can pass it explicitly.
+        self.rowcount = len(rows) if rowcount is None else rowcount
 
     def mappings(self):
         return self
@@ -392,6 +396,223 @@ class FakeCaseRecordsConnection:
             return FakeExecResult(rows=[dict(c) for c in candidates[:pool_size]])
 
         raise AssertionError(f"FakeCaseRecordsConnection: unrecognized SQL: {sql}")
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+
+class FakeConversationsConnection:
+    """In-memory stand-in for the subset of a SQLAlchemy Connection used by
+    conversations_queries.py (Step 12 Sub-step 1).
+
+    Dispatches on literal substrings of the real SQL text, kept in sync
+    with conversations_queries.py's actual queries -- same convention as
+    FakeCaseRecordsConnection. Branch order matters: more specific
+    substrings (e.g. "FOR UPDATE", "regenerated_from_message_id") are
+    checked before more general ones that would otherwise match first.
+
+    No real row locking is implemented here -- this fake only proves SQL
+    shape and single-connection sequencing, matching the Sub-step 1 plan's
+    explicit acceptance criterion that the *concurrency* guarantee itself
+    (FOR UPDATE actually serializing two callers) can only be proven
+    against a real Postgres integration test, not this fake.
+    """
+
+    def __init__(self):
+        self.conversations_by_id: dict[int, dict] = {}
+        self.messages_by_id: dict[int, dict] = {}
+        self._next_conversation_id = 1
+        self._next_message_id = 1
+        self.committed = False
+        self.rolled_back = False
+
+    def _active_messages_for_parent(self, parent_id):
+        return [
+            m for m in self.messages_by_id.values()
+            if m.get("parent_user_message_id") == parent_id and m.get("is_active")
+        ]
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        params = params or {}
+
+        if "INSERT INTO conversations" in sql:
+            new_id = self._next_conversation_id
+            self._next_conversation_id += 1
+            now = datetime.now(timezone.utc)
+            self.conversations_by_id[new_id] = {
+                "id": new_id,
+                "title": None,
+                "role_mode": params.get("role_mode"),
+                "created_at": now,
+                "updated_at": now,
+                "archived_at": None,
+            }
+            return FakeExecResult(rows=[{"id": new_id}], scalar=new_id)
+
+        if "SELECT COUNT(*) AS total FROM conversations" in sql:
+            total = sum(1 for c in self.conversations_by_id.values() if c["archived_at"] is None)
+            return FakeExecResult(rows=[{"total": total}])
+
+        if "SELECT * FROM conversations" in sql and "ORDER BY updated_at" in sql:
+            rows = [c for c in self.conversations_by_id.values() if c["archived_at"] is None]
+            rows.sort(key=lambda c: (c["updated_at"], c["id"]), reverse=True)
+            offset = params.get("offset", 0)
+            limit = params.get("limit")
+            if limit is not None:
+                rows = rows[offset : offset + limit]
+            return FakeExecResult(rows=[dict(r) for r in rows])
+
+        if "SELECT * FROM conversations WHERE id" in sql:
+            row = self.conversations_by_id.get(params.get("id"))
+            return FakeExecResult(rows=[dict(row)] if row else [])
+
+        if "SELECT * FROM chat_messages" in sql and "ORDER BY created_at, id" in sql:
+            rows = [
+                m for m in self.messages_by_id.values()
+                if m.get("conversation_id") == params.get("conversation_id") and m.get("is_active")
+            ]
+            rows.sort(key=lambda m: (m["created_at"], m["id"]))
+            return FakeExecResult(rows=[dict(r) for r in rows])
+
+        if "UPDATE conversations" in sql and "SET title = COALESCE" in sql:
+            row = self.conversations_by_id.get(params.get("id"))
+            if row is None:
+                return FakeExecResult(rows=[])
+            if params.get("title") is not None:
+                row["title"] = params["title"]
+            if params.get("role_mode") is not None:
+                row["role_mode"] = params["role_mode"]
+            row["updated_at"] = datetime.now(timezone.utc)
+            return FakeExecResult(rows=[dict(row)])
+
+        if "UPDATE conversations" in sql and "SET archived_at = now()" in sql:
+            row = self.conversations_by_id.get(params.get("id"))
+            if row is None or row["archived_at"] is not None:
+                return FakeExecResult(rowcount=0)
+            row["archived_at"] = datetime.now(timezone.utc)
+            row["updated_at"] = row["archived_at"]
+            return FakeExecResult(rowcount=1)
+
+        if "INSERT INTO chat_messages" in sql and "'user', :content, 'completed'" in sql:
+            new_id = self._next_message_id
+            self._next_message_id += 1
+            now = datetime.now(timezone.utc)
+            self.messages_by_id[new_id] = {
+                "id": new_id,
+                "conversation_id": params.get("conversation_id"),
+                "role": "user",
+                "content": params.get("content"),
+                "status": "completed",
+                "parent_user_message_id": None,
+                "attempt_number": 1,
+                "is_active": True,
+                "regenerated_from_message_id": None,
+                "provider": None,
+                "model": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+            return FakeExecResult(rows=[{"id": new_id}], scalar=new_id)
+
+        if "UPDATE conversations" in sql and "title = left(:content, 40)" in sql:
+            row = self.conversations_by_id.get(params.get("conversation_id"))
+            if row is None or row["title"] is not None:
+                return FakeExecResult(rowcount=0)
+            row["title"] = params["content"][:40]
+            row["updated_at"] = datetime.now(timezone.utc)
+            return FakeExecResult(rowcount=1)
+
+        if "INSERT INTO chat_messages" in sql and "regenerated_from_message_id" in sql:
+            new_id = self._next_message_id
+            self._next_message_id += 1
+            now = datetime.now(timezone.utc)
+            self.messages_by_id[new_id] = {
+                "id": new_id,
+                "conversation_id": params.get("conversation_id"),
+                "role": "assistant",
+                "content": "",
+                "status": "streaming",
+                "parent_user_message_id": params.get("parent_user_message_id"),
+                "attempt_number": params.get("attempt_number"),
+                "is_active": True,
+                "regenerated_from_message_id": params.get("old_active_message_id"),
+                "provider": params.get("provider"),
+                "model": params.get("model"),
+                "created_at": now,
+                "updated_at": now,
+            }
+            return FakeExecResult(rows=[{"id": new_id}], scalar=new_id)
+
+        if "INSERT INTO chat_messages" in sql and "attempt_number, is_active" in sql:
+            new_id = self._next_message_id
+            self._next_message_id += 1
+            now = datetime.now(timezone.utc)
+            self.messages_by_id[new_id] = {
+                "id": new_id,
+                "conversation_id": params.get("conversation_id"),
+                "role": "assistant",
+                "content": "",
+                "status": "streaming",
+                "parent_user_message_id": params.get("parent_user_message_id"),
+                "attempt_number": params.get("attempt_number"),
+                "is_active": True,
+                "regenerated_from_message_id": None,
+                "provider": params.get("provider"),
+                "model": params.get("model"),
+                "created_at": now,
+                "updated_at": now,
+            }
+            return FakeExecResult(rows=[{"id": new_id}], scalar=new_id)
+
+        if "UPDATE chat_messages" in sql and "SET content = :content" in sql:
+            row = self.messages_by_id.get(params.get("message_id"))
+            if row is None or row.get("status") != "streaming":
+                return FakeExecResult(rowcount=0)
+            row["content"] = params.get("content")
+            row["status"] = params.get("status")
+            row["error_message"] = params.get("error_message")
+            row["finish_reason"] = params.get("finish_reason")
+            row["usage"] = params.get("usage")
+            row["completed_at"] = row.get("completed_at") or datetime.now(timezone.utc)
+            row["updated_at"] = datetime.now(timezone.utc)
+            return FakeExecResult(rowcount=1)
+
+        if "FOR UPDATE" in sql:
+            row = self.messages_by_id.get(params.get("id"))
+            return FakeExecResult(rows=[dict(row)] if row else [])
+
+        if "SELECT COALESCE(MAX(attempt_number), 0)" in sql:
+            attempts = [
+                m["attempt_number"] for m in self.messages_by_id.values()
+                if m.get("parent_user_message_id") == params.get("parent_user_message_id")
+            ]
+            return FakeExecResult(rows=[{"max_attempt": max(attempts) if attempts else 0}])
+
+        if "SELECT id FROM chat_messages" in sql and "is_active = true" in sql:
+            active = self._active_messages_for_parent(params.get("parent_user_message_id"))
+            return FakeExecResult(rows=[{"id": active[0]["id"]}] if active else [])
+
+        if "UPDATE chat_messages" in sql and "SET is_active = false" in sql:
+            active = self._active_messages_for_parent(params.get("parent_user_message_id"))
+            for row in active:
+                row["is_active"] = False
+                row["updated_at"] = datetime.now(timezone.utc)
+            return FakeExecResult(rowcount=len(active))
+
+        if "interrupted by server restart" in sql:
+            affected = [m for m in self.messages_by_id.values() if m.get("status") == "streaming"]
+            for row in affected:
+                row["status"] = "failed"
+                row["error_message"] = "interrupted by server restart"
+                row["completed_at"] = datetime.now(timezone.utc)
+                row["updated_at"] = datetime.now(timezone.utc)
+            return FakeExecResult(rowcount=len(affected))
+
+        raise AssertionError(f"FakeConversationsConnection: unrecognized SQL: {sql}")
 
     def commit(self):
         self.committed = True

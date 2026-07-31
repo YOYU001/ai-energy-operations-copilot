@@ -192,6 +192,42 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
     UNIQUE (dataset_id, analysis_type, rule_version)
 );
 
+-- Step 12 Sub-step 1: conversations + chat_messages. See
+-- docs/step12_substep1_plan.md for full design rationale (guarded upgrade
+-- pattern, regenerate locking contract, connection-ownership contract);
+-- reviewed end-to-end by an independent read-only Codex pass across three
+-- iterations before implementation.
+CREATE TABLE IF NOT EXISTS conversations (
+    id SERIAL PRIMARY KEY,
+    title TEXT,
+    role_mode TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    archived_at TIMESTAMP
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'conversations_role_mode_check'
+          AND conrelid = 'conversations'::regclass
+    ) THEN
+        ALTER TABLE conversations ADD CONSTRAINT conversations_role_mode_check
+            CHECK (role_mode IS NULL OR role_mode IN ('operator', 'engineer', 'executive', 'training'));
+    END IF;
+END $$;
+
+-- chat_messages was a Step 1-era placeholder (id, session_id, role,
+-- content, created_at) with zero rows in every known dev DB. Rather than
+-- a one-time DROP TABLE (which would destroy real conversation data the
+-- next time anyone re-runs schema.sql after this ships), this is a
+-- guarded upgrade: ADD COLUMN IF NOT EXISTS for every new column, then
+-- existence-checked ALTER/ADD CONSTRAINT statements, so re-running this
+-- block against an already-upgraded table is always a no-op. Any legacy
+-- row still missing conversation_id (impossible to have any other way,
+-- since the old schema never had that column) aborts the migration loudly
+-- rather than guessing which conversation it belongs to.
 CREATE TABLE IF NOT EXISTS chat_messages (
     id SERIAL PRIMARY KEY,
     session_id TEXT,
@@ -199,3 +235,213 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     content TEXT,
     created_at TIMESTAMP
 );
+
+DO $$
+BEGIN
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS conversation_id INTEGER;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS status TEXT;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS citations JSONB;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS tool_calls JSONB;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS parent_user_message_id INTEGER;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS attempt_number INTEGER;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS is_active BOOLEAN;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS regenerated_from_message_id INTEGER;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS provider TEXT;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS model TEXT;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS model_version TEXT;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS finish_reason TEXT;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS usage JSONB;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS error_message TEXT;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS started_at TIMESTAMP;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;
+    ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'updated_at' AND column_default IS NOT NULL
+    ) THEN
+        ALTER TABLE chat_messages ALTER COLUMN updated_at SET DEFAULT now();
+    END IF;
+    UPDATE chat_messages SET updated_at = COALESCE(updated_at, created_at, now()) WHERE updated_at IS NULL;
+    ALTER TABLE chat_messages ALTER COLUMN updated_at SET NOT NULL;
+
+    -- Never assume "currently empty" is a permanent fact. Any row still
+    -- missing conversation_id (the old placeholder schema never had this
+    -- column, so any pre-Step-12 row will be NULL here) is treated as
+    -- orphaned data this migration cannot safely re-home on its own.
+    -- It aborts loudly instead of guessing or discarding.
+    IF EXISTS (SELECT 1 FROM chat_messages WHERE conversation_id IS NULL) THEN
+        RAISE EXCEPTION 'chat_messages upgrade aborted: % row(s) exist with no conversation_id -- back up/export or manually resolve them before re-running schema.sql. This upgrade never silently discards or auto-assigns orphaned rows to a conversation.',
+            (SELECT count(*) FROM chat_messages WHERE conversation_id IS NULL);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'conversation_id' AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE chat_messages ALTER COLUMN conversation_id SET NOT NULL;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chat_messages_conversation_id_fkey'
+          AND conrelid = 'chat_messages'::regclass
+    ) THEN
+        ALTER TABLE chat_messages
+            ADD CONSTRAINT chat_messages_conversation_id_fkey
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id);
+    END IF;
+
+    UPDATE chat_messages SET attempt_number = 1 WHERE attempt_number IS NULL;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'attempt_number' AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE chat_messages ALTER COLUMN attempt_number SET NOT NULL;
+    END IF;
+    ALTER TABLE chat_messages ALTER COLUMN attempt_number SET DEFAULT 1;
+
+    UPDATE chat_messages SET is_active = true WHERE is_active IS NULL;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'is_active' AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE chat_messages ALTER COLUMN is_active SET NOT NULL;
+    END IF;
+    ALTER TABLE chat_messages ALTER COLUMN is_active SET DEFAULT true;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'status' AND is_nullable = 'NO'
+    ) THEN
+        UPDATE chat_messages SET status = 'completed' WHERE status IS NULL;
+        ALTER TABLE chat_messages ALTER COLUMN status SET NOT NULL;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chat_messages_role_check'
+          AND conrelid = 'chat_messages'::regclass
+    ) THEN
+        ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_role_check
+            CHECK (role IN ('user', 'assistant'));
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chat_messages_status_check'
+          AND conrelid = 'chat_messages'::regclass
+    ) THEN
+        ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_status_check
+            CHECK (status IN ('streaming', 'completed', 'aborted', 'failed'));
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chat_messages_attempt_number_check'
+          AND conrelid = 'chat_messages'::regclass
+    ) THEN
+        ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_attempt_number_check
+            CHECK (attempt_number >= 1);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chat_messages_role_shape_check'
+          AND conrelid = 'chat_messages'::regclass
+    ) THEN
+        ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_role_shape_check
+            CHECK (
+                (role = 'user'
+                    AND parent_user_message_id IS NULL
+                    AND regenerated_from_message_id IS NULL
+                    AND status = 'completed')
+                OR
+                (role = 'assistant'
+                    AND parent_user_message_id IS NOT NULL)
+            );
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chat_messages_parent_fkey'
+          AND conrelid = 'chat_messages'::regclass
+    ) THEN
+        ALTER TABLE chat_messages
+            ADD CONSTRAINT chat_messages_parent_fkey
+            FOREIGN KEY (parent_user_message_id) REFERENCES chat_messages(id);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chat_messages_regenerated_from_fkey'
+          AND conrelid = 'chat_messages'::regclass
+    ) THEN
+        ALTER TABLE chat_messages
+            ADD CONSTRAINT chat_messages_regenerated_from_fkey
+            FOREIGN KEY (regenerated_from_message_id) REFERENCES chat_messages(id);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chat_messages_parent_attempt_key'
+          AND conrelid = 'chat_messages'::regclass
+    ) THEN
+        ALTER TABLE chat_messages
+            ADD CONSTRAINT chat_messages_parent_attempt_key
+            UNIQUE (parent_user_message_id, attempt_number);
+    END IF;
+
+    -- session_id has no equivalent in the new model (conversation_id
+    -- replaces its role) -- but proving every row now has a conversation_id
+    -- does NOT by itself prove session_id's own values are redundant or
+    -- safely discardable. Require an explicit, separate check: only drop
+    -- the column when every surviving row's session_id is already NULL.
+    --
+    -- This whole step must be guarded by a column-existence check: once a
+    -- prior run has already dropped session_id, a bare
+    -- `SELECT ... WHERE session_id IS NOT NULL` on a later run would fail
+    -- with "column does not exist" the moment this statement is reached,
+    -- breaking re-runnability. Wrapping it in this outer IF means the
+    -- value-check query is only ever planned/executed while the column
+    -- still exists; once it's gone, this entire branch is skipped and the
+    -- migration stays a no-op here on every subsequent run.
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'session_id'
+    ) THEN
+        IF EXISTS (SELECT 1 FROM chat_messages WHERE session_id IS NOT NULL) THEN
+            RAISE EXCEPTION 'chat_messages upgrade aborted: % row(s) still have a non-null session_id -- session_id is being retired in favor of conversation_id; export/verify this data is safe to discard, then either NULL it out manually or re-run schema.sql with the session_id DROP COLUMN step skipped for this pass.',
+                (SELECT count(*) FROM chat_messages WHERE session_id IS NOT NULL);
+        END IF;
+        ALTER TABLE chat_messages DROP COLUMN session_id;
+    END IF;
+
+    -- created_at was nullable with no default in the old placeholder
+    -- schema -- backfill any legacy NULLs, then guardedly add a default
+    -- and NOT NULL so both existing rows and the
+    -- (conversation_id, created_at, id) index below always have a real,
+    -- ordering-safe timestamp.
+    UPDATE chat_messages SET created_at = COALESCE(created_at, now()) WHERE created_at IS NULL;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'created_at' AND column_default IS NOT NULL
+    ) THEN
+        ALTER TABLE chat_messages ALTER COLUMN created_at SET DEFAULT now();
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'created_at' AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE chat_messages ALTER COLUMN created_at SET NOT NULL;
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_active_attempt_key
+    ON chat_messages (parent_user_message_id) WHERE is_active;
+
+CREATE INDEX IF NOT EXISTS chat_messages_conversation_created_idx
+    ON chat_messages (conversation_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS conversations_active_updated_idx
+    ON conversations (updated_at) WHERE archived_at IS NULL;
