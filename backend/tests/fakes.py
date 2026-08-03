@@ -593,9 +593,9 @@ class FakeConversationsConnection:
             ]
             return FakeExecResult(rows=[{"max_attempt": max(attempts) if attempts else 0}])
 
-        if "SELECT id FROM chat_messages" in sql and "is_active = true" in sql:
+        if "SELECT id, status FROM chat_messages" in sql and "is_active = true" in sql:
             active = self._active_messages_for_parent(params.get("parent_user_message_id"))
-            return FakeExecResult(rows=[{"id": active[0]["id"]}] if active else [])
+            return FakeExecResult(rows=[{"id": active[0]["id"], "status": active[0]["status"]}] if active else [])
 
         if "UPDATE chat_messages" in sql and "SET is_active = false" in sql:
             active = self._active_messages_for_parent(params.get("parent_user_message_id"))
@@ -617,6 +617,22 @@ class FakeConversationsConnection:
             row["citations"] = json.loads(citations_param) if citations_param is not None else None
             row["updated_at"] = datetime.now(timezone.utc)
             return FakeExecResult(rowcount=1)
+
+        if "stale_streaming" in sql:
+            cutoff = params.get("stale_before")
+            conversation_id = params.get("conversation_id")
+            affected = [
+                m for m in self.messages_by_id.values()
+                if m.get("conversation_id") == conversation_id
+                and m.get("status") == "streaming"
+                and m.get("created_at") < cutoff
+            ]
+            for row in affected:
+                row["status"] = "failed"
+                row["error_message"] = "stale_streaming"
+                row["completed_at"] = datetime.now(timezone.utc)
+                row["updated_at"] = datetime.now(timezone.utc)
+            return FakeExecResult(rowcount=len(affected))
 
         if "interrupted by server restart" in sql:
             affected = [m for m in self.messages_by_id.values() if m.get("status") == "streaming"]

@@ -18,6 +18,7 @@ see test_conversations_queries_integration.py for the real-Postgres test
 that covers that specifically.
 """
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ from app.conversations_queries import (
     ConversationMismatch,
     InvalidRegenerateTarget,
     ParentMessageNotFound,
+    RegenerateAlreadyInProgress,
     archive_conversation,
     create_conversation,
     create_regenerate_attempt,
@@ -34,6 +36,7 @@ from app.conversations_queries import (
     get_conversation_with_active_messages,
     insert_user_message,
     list_conversations,
+    mark_stale_streaming_attempts_for_conversation,
     mark_stale_streaming_messages_as_failed,
     record_tool_activity,
     update_conversation,
@@ -84,7 +87,10 @@ def test_get_conversation_with_active_messages_only_returns_active_rows():
     conn = FakeConversationsConnection()
     conversation_id = create_conversation(conn)
     user_message_id = insert_user_message(conn, conversation_id, "hello")
-    create_streaming_assistant_placeholder(conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini")
+    first_attempt_id = create_streaming_assistant_placeholder(conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini")
+    # must be finalized before regenerating -- create_regenerate_attempt now
+    # rejects regenerating over a still-streaming active attempt (Sub-step 3C)
+    finalize_assistant_message(conn, first_attempt_id, "answer", "completed", None, "stop", None)
     regenerated_id = create_regenerate_attempt(conn, conversation_id, user_message_id, "openai", "gpt-4o-mini")
 
     result = get_conversation_with_active_messages(conn, conversation_id)
@@ -241,6 +247,8 @@ def test_create_regenerate_attempt_increments_attempt_number_and_swaps_active():
     first_attempt_id = create_streaming_assistant_placeholder(
         conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini"
     )
+    # must be finalized before regenerating (Sub-step 3C in-flight guard)
+    finalize_assistant_message(conn, first_attempt_id, "answer", "completed", None, "stop", None)
 
     second_attempt_id = create_regenerate_attempt(conn, conversation_id, user_message_id, "openai", "gpt-4o-mini")
 
@@ -274,9 +282,13 @@ def test_multiple_regenerates_keep_incrementing_attempt_number():
     conn = FakeConversationsConnection()
     conversation_id = create_conversation(conn)
     user_message_id = insert_user_message(conn, conversation_id, "hi")
-    create_streaming_assistant_placeholder(conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini")
+    first_id = create_streaming_assistant_placeholder(conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini")
+    # each attempt must be finalized before the next regenerate call
+    # (Sub-step 3C in-flight guard rejects regenerating over 'streaming')
+    finalize_assistant_message(conn, first_id, "answer 1", "completed", None, "stop", None)
 
     second_id = create_regenerate_attempt(conn, conversation_id, user_message_id, "openai", "gpt-4o-mini")
+    finalize_assistant_message(conn, second_id, "answer 2", "completed", None, "stop", None)
     third_id = create_regenerate_attempt(conn, conversation_id, user_message_id, "openai", "gpt-4o-mini")
 
     assert conn.messages_by_id[second_id]["attempt_number"] == 2
@@ -359,6 +371,101 @@ def test_mark_stale_streaming_messages_as_failed_only_affects_streaming_rows():
 
 
 # ---------------------------------------------------------------------------
+# create_regenerate_attempt in-flight guard (Step 12 Sub-step 3C)
+# ---------------------------------------------------------------------------
+
+
+def test_create_regenerate_attempt_rejects_when_active_attempt_is_streaming():
+    conn = FakeConversationsConnection()
+    conversation_id = create_conversation(conn)
+    user_message_id = insert_user_message(conn, conversation_id, "hi")
+    create_streaming_assistant_placeholder(conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini")
+    # never finalized -- still 'streaming'
+
+    with pytest.raises(RegenerateAlreadyInProgress):
+        create_regenerate_attempt(conn, conversation_id, user_message_id, "openai", "gpt-4o-mini")
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "aborted"])
+def test_create_regenerate_attempt_succeeds_for_any_terminal_status(status):
+    conn = FakeConversationsConnection()
+    conversation_id = create_conversation(conn)
+    user_message_id = insert_user_message(conn, conversation_id, "hi")
+    first_id = create_streaming_assistant_placeholder(conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini")
+    finalize_assistant_message(conn, first_id, "answer", status, None, "stop", None)
+
+    new_id = create_regenerate_attempt(conn, conversation_id, user_message_id, "openai", "gpt-4o-mini")
+
+    assert conn.messages_by_id[new_id]["attempt_number"] == 2
+
+
+# ---------------------------------------------------------------------------
+# mark_stale_streaming_attempts_for_conversation (Step 12 Sub-step 3C)
+# ---------------------------------------------------------------------------
+
+
+def test_mark_stale_streaming_attempts_marks_old_streaming_row_as_failed():
+    conn = FakeConversationsConnection()
+    conversation_id = create_conversation(conn)
+    user_message_id = insert_user_message(conn, conversation_id, "hi")
+    streaming_id = create_streaming_assistant_placeholder(conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini")
+    conn.messages_by_id[streaming_id]["created_at"] = datetime.now(timezone.utc) - timedelta(seconds=600)
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=300)
+
+    affected = mark_stale_streaming_attempts_for_conversation(conn, conversation_id, stale_before)
+
+    assert affected == 1
+    row = conn.messages_by_id[streaming_id]
+    assert row["status"] == "failed"
+    assert row["error_message"] == "stale_streaming"
+    assert row["completed_at"] is not None
+
+
+def test_mark_stale_streaming_attempts_does_not_touch_recent_streaming_row():
+    conn = FakeConversationsConnection()
+    conversation_id = create_conversation(conn)
+    user_message_id = insert_user_message(conn, conversation_id, "hi")
+    streaming_id = create_streaming_assistant_placeholder(conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini")
+    # created_at defaults to "just now" -- well within the cutoff window
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=300)
+
+    affected = mark_stale_streaming_attempts_for_conversation(conn, conversation_id, stale_before)
+
+    assert affected == 0
+    assert conn.messages_by_id[streaming_id]["status"] == "streaming"
+
+
+def test_mark_stale_streaming_attempts_does_not_touch_non_streaming_rows():
+    conn = FakeConversationsConnection()
+    conversation_id = create_conversation(conn)
+    user_message_id = insert_user_message(conn, conversation_id, "hi")
+    completed_id = create_streaming_assistant_placeholder(conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini")
+    finalize_assistant_message(conn, completed_id, "answer", "completed", None, "stop", None)
+    conn.messages_by_id[completed_id]["created_at"] = datetime.now(timezone.utc) - timedelta(seconds=600)
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=300)
+
+    affected = mark_stale_streaming_attempts_for_conversation(conn, conversation_id, stale_before)
+
+    assert affected == 0
+    assert conn.messages_by_id[completed_id]["status"] == "completed"
+
+
+def test_mark_stale_streaming_attempts_does_not_touch_other_conversations():
+    conn = FakeConversationsConnection()
+    conversation_id_a = create_conversation(conn)
+    conversation_id_b = create_conversation(conn)
+    user_message_id_b = insert_user_message(conn, conversation_id_b, "hi")
+    streaming_id_b = create_streaming_assistant_placeholder(conn, conversation_id_b, user_message_id_b, 1, "openai", "gpt-4o-mini")
+    conn.messages_by_id[streaming_id_b]["created_at"] = datetime.now(timezone.utc) - timedelta(seconds=600)
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=300)
+
+    affected = mark_stale_streaming_attempts_for_conversation(conn, conversation_id_a, stale_before)
+
+    assert affected == 0
+    assert conn.messages_by_id[streaming_id_b]["status"] == "streaming"
+
+
+# ---------------------------------------------------------------------------
 # SQL shape (recording FakeConnection, not FakeConversationsConnection --
 # these assert against the actual executed SQL text so a deleted WHERE
 # clause in conversations_queries.py would be caught even though
@@ -414,8 +521,8 @@ def test_create_regenerate_attempt_sql_uses_for_update():
     conn = FakeConnection(
         responses=[
             [{"id": 1, "conversation_id": 1, "role": "user"}],  # lock parent
+            [{"id": 5, "status": "completed"}],  # current active attempt (not streaming -- guard passes)
             [{"max_attempt": 1}],  # max attempt_number
-            [{"id": 5}],  # current active attempt
             [],  # retire old active attempt
             [{"id": 6}],  # insert new attempt
         ]

@@ -127,3 +127,53 @@ def test_phase_c_finalize_persists_against_real_db(monkeypatch, seeded_conversat
     # the pool has no permanently leaked checked-out connection after the
     # full Phase A -> B -> C cycle completes
     assert engine.pool.checkedout() == 0
+
+
+def test_regenerate_full_http_cycle_against_real_db(monkeypatch, seeded_conversation):
+    """Step 12 Sub-step 3C: end-to-end regenerate through the real HTTP
+    route and real DB -- first send, then regenerate. Proves the attempt
+    lifecycle (old attempt inactive, new attempt the sole active one,
+    attempt_number incremented) and that no row is left in a non-terminal
+    'streaming' state after the full cycle, using the real
+    create_regenerate_attempt/finalize_assistant_message/Phase A-C wiring,
+    not a fake connection."""
+    monkeypatch.setattr(main_module, "_build_chat_provider", lambda: _FakeCompletingProvider())
+
+    first_response = client.post(
+        f"/conversations/{seeded_conversation}/messages", json={"content": "integration test question"}
+    )
+    assert first_response.status_code == 200
+
+    with get_connection() as conn:
+        user_message_id = conn.execute(
+            text("SELECT id FROM chat_messages WHERE conversation_id = :id AND role = 'user'"),
+            {"id": seeded_conversation},
+        ).mappings().first()["id"]
+        first_attempt_id = conn.execute(
+            text("SELECT id FROM chat_messages WHERE conversation_id = :id AND role = 'assistant'"),
+            {"id": seeded_conversation},
+        ).mappings().first()["id"]
+
+    regenerate_response = client.post(
+        f"/conversations/{seeded_conversation}/messages/{user_message_id}/regenerate"
+    )
+    assert regenerate_response.status_code == 200
+
+    with get_connection() as verify_conn:
+        rows = verify_conn.execute(
+            text(
+                "SELECT id, attempt_number, is_active, status FROM chat_messages "
+                "WHERE parent_user_message_id = :id ORDER BY attempt_number"
+            ),
+            {"id": user_message_id},
+        ).mappings().all()
+
+    assert [r["attempt_number"] for r in rows] == [1, 2]
+    assert rows[0]["id"] == first_attempt_id
+    assert rows[0]["is_active"] is False
+    assert rows[1]["is_active"] is True
+    assert rows[1]["status"] == "completed"
+
+    # no message for this parent is left in a non-terminal 'streaming' state
+    assert all(r["status"] != "streaming" for r in rows)
+    assert engine.pool.checkedout() == 0

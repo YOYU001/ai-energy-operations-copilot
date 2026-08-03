@@ -3,7 +3,8 @@ import json
 import logging
 import tempfile
 import time
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -13,13 +14,20 @@ from sqlalchemy import text
 
 from app.case_records_queries import get_case_by_case_id
 from app.conversations_queries import (
+    ConversationMismatch,
+    InvalidRegenerateTarget,
+    ParentMessageNotFound,
+    RegenerateAlreadyInProgress,
     archive_conversation,
     create_conversation,
+    create_regenerate_attempt,
     create_streaming_assistant_placeholder,
     finalize_assistant_message,
     get_conversation_with_active_messages,
     insert_user_message,
     list_conversations,
+    mark_stale_streaming_attempts_for_conversation,
+    mark_stale_streaming_messages_as_failed,
     record_tool_activity,
     update_conversation,
 )
@@ -102,9 +110,50 @@ from app.services.tool_registry import (
     summarize_tool_result,
 )
 
-app = FastAPI()
-
 log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Step 12 Sub-step 3C: one-shot startup reconciliation
+    (docs/step12_substep3c_plan.md section 2). Runs exactly once,
+    synchronously, before the app accepts requests. Assumption: exactly
+    one backend process/worker -- under that assumption every
+    status='streaming' row present at boot is necessarily orphaned by a
+    prior crash (nothing else could have left a row in that state while
+    this process wasn't running yet). Not safe under a multi-worker
+    deployment; that remains explicitly out of scope.
+
+    A DB error here must not prevent the app from starting -- crash-
+    looping on every boot because reconciliation itself can't reach the
+    DB is worse than starting with some rows still 'streaming' from a
+    prior crash. Logged at ERROR (not swallowed, not just WARNING)
+    because it silently degrades a safety mechanism; the read-time stale
+    cleanup (mark_stale_streaming_attempts_for_conversation) is the
+    fallback for whatever this pass misses.
+    """
+    try:
+        with get_connection() as conn:
+            rowcount = mark_stale_streaming_messages_as_failed(conn)
+            conn.commit()
+        if rowcount:
+            log.warning("startup reconciliation: marked %d stale streaming message(s) as failed", rowcount)
+    except Exception:
+        log.error(
+            "startup reconciliation failed -- app will still start; stale rows rely on read-time cleanup",
+            exc_info=True,
+        )
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+# Step 12 Sub-step 3C (docs/step12_substep3c_plan.md section 3): read-time
+# stale-recovery threshold, comfortably longer than
+# OVERALL_GENERATION_TIMEOUT_SECONDS (60s) plus two _finalize_with_fallback
+# attempts combined, so a message still 'streaming' past this age is never
+# one genuinely still in flight.
+STREAMING_STALE_AFTER_SECONDS = 300
 
 # fail-closed safety cap for rule-engine analysis; not a business rule, just an
 # MVP-scale guard against computing a percentile/anomaly scan over an unbounded
@@ -557,8 +606,21 @@ def get_conversations(
     return {"total": total, "limit": limit, "offset": offset, "items": items}
 
 
+def _cleanup_stale_streaming(conn, conversation_id: int) -> None:
+    """Explicit, independent call the route makes before reading -- never
+    hidden inside get_conversation_with_active_messages, which stays a
+    pure read with no side effects (docs/step12_substep3c_plan.md section
+    3). Commits immediately: this is self-healing maintenance, not a
+    user-facing mutation the caller needs to coordinate with anything
+    else in the request."""
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=STREAMING_STALE_AFTER_SECONDS)
+    mark_stale_streaming_attempts_for_conversation(conn, conversation_id, stale_before)
+    conn.commit()
+
+
 @app.get("/conversations/{conversation_id}", response_model=ConversationDetail)
 def get_conversation(conversation_id: int, conn=Depends(get_db_dependency)):
+    _cleanup_stale_streaming(conn, conversation_id)
     detail = get_conversation_with_active_messages(conn, conversation_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
@@ -597,6 +659,7 @@ def get_conversation_messages(conversation_id: int, conn=Depends(get_db_dependen
     would later have to change shape. Reuses
     get_conversation_with_active_messages exactly as GET /conversations/{id}
     does -- same ordering (created_at, id), same is_active=true filter."""
+    _cleanup_stale_streaming(conn, conversation_id)
     detail = get_conversation_with_active_messages(conn, conversation_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
@@ -996,6 +1059,54 @@ async def post_message(conversation_id: int, body: PostMessageRequest, request: 
 
     is_diagnostic = looks_like_diagnostic_question(content)
     provider_messages = _build_provider_messages(prior_messages, content, role_mode)
+    return StreamingResponse(
+        generate(assistant_message_id, provider, provider_messages, request, is_diagnostic, _build_embedding_provider),
+        media_type="text/event-stream",
+    )
+
+
+@app.post("/conversations/{conversation_id}/messages/{message_id}/regenerate")
+async def post_regenerate(conversation_id: int, message_id: int, request: Request):
+    """message_id here is the PARENT USER MESSAGE id (matching
+    create_regenerate_attempt's own parameter name), not an assistant
+    message id -- easy to misread, documented explicitly per
+    docs/step12_substep3c_plan.md section 4. No request body: regenerate
+    re-asks the same original user turn; it never accepts new text (use
+    POST /conversations/{id}/messages for that). Reconnect to an existing
+    SSE stream is not supported -- this always creates a brand-new
+    assistant attempt; it never resumes or replays a previous attempt's
+    token stream (section 8)."""
+    with get_connection() as conn:
+        detail = get_conversation_with_active_messages(conn, conversation_id)
+        if detail is None or detail["conversation"]["archived_at"] is not None:
+            raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
+        role_mode = detail["conversation"]["role_mode"]
+
+        parent_message = next((m for m in detail["messages"] if m["id"] == message_id), None)
+
+        provider = _build_chat_provider()
+        try:
+            assistant_message_id = create_regenerate_attempt(
+                conn, conversation_id, message_id, provider.provider_name, provider.model_name,
+            )
+        except ParentMessageNotFound:
+            raise HTTPException(status_code=404, detail=f"message {message_id} not found")
+        except ConversationMismatch:
+            # treated identically to "not found" -- no disclosure that this
+            # id belongs to a different conversation
+            raise HTTPException(status_code=404, detail=f"message {message_id} not found")
+        except InvalidRegenerateTarget:
+            raise HTTPException(status_code=400, detail="message is not a regenerable user message")
+        except RegenerateAlreadyInProgress:
+            raise HTTPException(status_code=409, detail="a response is already being generated for this message")
+        conn.commit()
+
+        parent_content = parent_message["content"]
+        prior_messages = [m for m in detail["messages"] if m["id"] != message_id]
+    # connection closed here -- before generate() is ever called.
+
+    is_diagnostic = looks_like_diagnostic_question(parent_content)
+    provider_messages = _build_provider_messages(prior_messages, parent_content, role_mode)
     return StreamingResponse(
         generate(assistant_message_id, provider, provider_messages, request, is_diagnostic, _build_embedding_provider),
         media_type="text/event-stream",
