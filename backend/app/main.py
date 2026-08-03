@@ -7,6 +7,13 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException
 from sqlalchemy import text
 
 from app.case_records_queries import get_case_by_case_id
+from app.conversations_queries import (
+    archive_conversation,
+    create_conversation,
+    get_conversation_with_active_messages,
+    list_conversations,
+    update_conversation,
+)
 from app.datasets_queries import (
     get_analysis_run,
     get_dataset_by_id,
@@ -35,6 +42,11 @@ from app.schemas import (
     CaseSearchResult,
     CaseSummary,
     ChunkSummary,
+    ConversationCreateRequest,
+    ConversationDetail,
+    ConversationsPage,
+    ConversationSummary,
+    ConversationUpdateRequest,
     DatasetSummary,
     DatasetSummaryStatistics,
     DocumentSummary,
@@ -366,6 +378,54 @@ def post_case_search(request: CaseSearchRequest, conn=Depends(get_db_dependency)
         top_k=request.top_k,
     )
     return [_scored_case_to_search_result(s) for s in scored]
+
+
+@app.post("/conversations", response_model=ConversationSummary, status_code=201)
+def post_conversation(request: ConversationCreateRequest, conn=Depends(get_db_dependency)):
+    new_id = create_conversation(conn, role_mode=request.role_mode)
+    conn.commit()
+    detail = get_conversation_with_active_messages(conn, new_id)
+    return detail["conversation"]
+
+
+@app.get("/conversations", response_model=ConversationsPage)
+def get_conversations(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    conn=Depends(get_db_dependency),
+):
+    total, items = list_conversations(conn, limit, offset)
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+@app.get("/conversations/{conversation_id}", response_model=ConversationDetail)
+def get_conversation(conversation_id: int, conn=Depends(get_db_dependency)):
+    detail = get_conversation_with_active_messages(conn, conversation_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
+    return detail
+
+
+@app.patch("/conversations/{conversation_id}", response_model=ConversationSummary)
+def patch_conversation(
+    conversation_id: int,
+    request: ConversationUpdateRequest,
+    conn=Depends(get_db_dependency),
+):
+    updated = update_conversation(conn, conversation_id, title=request.title, role_mode=request.role_mode)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
+    conn.commit()
+    return updated
+
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conversation(conversation_id: int, conn=Depends(get_db_dependency)):
+    rowcount = archive_conversation(conn, conversation_id)
+    if rowcount == 0:
+        raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
+    conn.commit()
+    return {"archived": True}
 
 
 @app.post("/datasets/upload", response_model=IngestResult)
