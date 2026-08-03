@@ -166,7 +166,7 @@ def test_generate_normal_completion_streams_tokens_and_finalizes_completed(monke
     monkeypatch.setattr(main_module, "finalize_assistant_message", recorder)
 
     frames = _collect_frames(
-        main_module.generate(42, FakeCompletingProvider(), [{"role": "user", "content": "hi"}], FakeRequest())
+        main_module.generate(42, FakeCompletingProvider(), [{"role": "user", "content": "hi"}], FakeRequest(), is_diagnostic=False, build_embedding_provider=None)
     )
 
     joined = "".join(frames)
@@ -192,23 +192,29 @@ def test_generate_normal_completion_streams_tokens_and_finalizes_completed(monke
 
 
 def test_generate_provider_api_error_finalizes_failed_provider_error(monkeypatch):
+    """This error happens during Phase 1 (tool orchestration round 1,
+    which every message enters first). Phase 1 content is buffered, never
+    streamed -- so the "partial" delta that arrived just before the error
+    must NOT reach the client and must NOT be persisted (Internal
+    Knowledge Only fix: nothing not-yet-vetted is ever shown or saved)."""
     _use_fake_connection(monkeypatch)
     recorder = _FinalizeRecorder()
     monkeypatch.setattr(main_module, "finalize_assistant_message", recorder)
 
     frames = _collect_frames(
-        main_module.generate(42, FakeAPIErrorProvider(), [{"role": "user", "content": "hi"}], FakeRequest())
+        main_module.generate(42, FakeAPIErrorProvider(), [{"role": "user", "content": "hi"}], FakeRequest(), is_diagnostic=False, build_embedding_provider=None)
     )
 
     joined = "".join(frames)
-    assert 'data: {"delta": "partial"}' in joined
+    assert 'data: {"delta": "partial"}' not in joined
+    assert "event: tool_call" not in joined
     assert "event: message_failed" in joined
     assert '"error": "assistant response failed, please try again"' in joined
     assert "event: message_completed" not in joined
 
     assert len(recorder.calls) == 1
     call = recorder.calls[0]
-    assert call["content"] == "partial"
+    assert call["content"] == ""
     assert call["status"] == "failed"
     assert call["error_message"] == "provider_error"
 
@@ -225,7 +231,7 @@ def test_generate_idle_timeout_finalizes_failed_provider_timeout(monkeypatch):
     monkeypatch.setattr(main_module, "finalize_assistant_message", recorder)
 
     frames = _collect_frames(
-        main_module.generate(42, FakeStallingProvider(), [{"role": "user", "content": "hi"}], FakeRequest())
+        main_module.generate(42, FakeStallingProvider(), [{"role": "user", "content": "hi"}], FakeRequest(), is_diagnostic=False, build_embedding_provider=None)
     )
 
     joined = "".join(frames)
@@ -242,23 +248,28 @@ def test_generate_idle_timeout_finalizes_failed_provider_timeout(monkeypatch):
 
 
 def test_generate_overall_timeout_finalizes_failed_provider_timeout(monkeypatch):
+    """This timeout happens during Phase 1 (tool orchestration round 1).
+    Phase 1 content is buffered, never streamed -- so none of the chunks
+    that arrived before the timeout tripped may reach the client or get
+    persisted (same Internal Knowledge Only fix as the provider-error
+    case above)."""
     _use_fake_connection(monkeypatch)
     monkeypatch.setattr(main_module, "OVERALL_GENERATION_TIMEOUT_SECONDS", 0.05)
     recorder = _FinalizeRecorder()
     monkeypatch.setattr(main_module, "finalize_assistant_message", recorder)
 
     frames = _collect_frames(
-        main_module.generate(42, FakeSlowButNotStallingProvider(), [{"role": "user", "content": "hi"}], FakeRequest())
+        main_module.generate(42, FakeSlowButNotStallingProvider(), [{"role": "user", "content": "hi"}], FakeRequest(), is_diagnostic=False, build_embedding_provider=None)
     )
 
     joined = "".join(frames)
     assert "event: message_failed" in joined
+    assert "chunk-0" not in joined
 
     assert len(recorder.calls) == 1
     assert recorder.calls[0]["status"] == "failed"
     assert recorder.calls[0]["error_message"] == "provider_timeout"
-    # some (but not necessarily all 5) chunks streamed before the cap tripped
-    assert "chunk-0" in recorder.calls[0]["content"]
+    assert recorder.calls[0]["content"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -266,19 +277,24 @@ def test_generate_overall_timeout_finalizes_failed_provider_timeout(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_generate_disconnect_finalizes_aborted_with_partial_content_and_suppresses_terminal_frame(monkeypatch):
+def test_generate_disconnect_finalizes_aborted_with_no_leaked_content_and_suppresses_terminal_frame(monkeypatch):
+    """Disconnect happens during Phase 1 (tool orchestration round 1). The
+    "Hello" delta that arrived just before the disconnect check tripped
+    was only ever buffered, never streamed -- so it must not appear in the
+    SSE output and must not be persisted (same Internal Knowledge Only fix
+    as the provider-error/timeout cases above)."""
     _use_fake_connection(monkeypatch)
     recorder = _FinalizeRecorder()
     monkeypatch.setattr(main_module, "finalize_assistant_message", recorder)
 
-    # 1st is_disconnected() call (loop start, before 1st event) -> False, lets "Hello" through.
-    # 2nd call (loop start, before 2nd event) -> True, breaks the loop with partial content.
+    # 1st is_disconnected() call (loop start, before 1st event) -> False, lets "Hello" be buffered.
+    # 2nd call (loop start, before 2nd event) -> True, breaks the loop.
     frames = _collect_frames(
-        main_module.generate(42, FakeCompletingProvider(), [{"role": "user", "content": "hi"}], FakeRequest(disconnect_after=1))
+        main_module.generate(42, FakeCompletingProvider(), [{"role": "user", "content": "hi"}], FakeRequest(disconnect_after=1), is_diagnostic=False, build_embedding_provider=None)
     )
 
     joined = "".join(frames)
-    assert 'data: {"delta": "Hello"}' in joined
+    assert 'data: {"delta": "Hello"}' not in joined
     assert 'data: {"delta": " world"}' not in joined
     # terminal SSE frame is best-effort and suppressed once disconnected is observed
     assert "event: message_completed" not in joined
@@ -286,7 +302,7 @@ def test_generate_disconnect_finalizes_aborted_with_partial_content_and_suppress
 
     assert len(recorder.calls) == 1
     call = recorder.calls[0]
-    assert call["content"] == "Hello"
+    assert call["content"] == ""
     assert call["status"] == "aborted"
     assert call["error_message"] is None
 
@@ -327,7 +343,7 @@ def test_generate_does_not_raise_when_both_finalize_attempts_fail(monkeypatch, c
     with caplog.at_level("ERROR"):
         # must not raise out of the generator despite both finalize attempts failing
         frames = _collect_frames(
-            main_module.generate(42, FakeCompletingProvider(), [{"role": "user", "content": "hi"}], FakeRequest())
+            main_module.generate(42, FakeCompletingProvider(), [{"role": "user", "content": "hi"}], FakeRequest(), is_diagnostic=False, build_embedding_provider=None)
         )
 
     assert len(recorder.calls) == 2

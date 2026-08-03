@@ -35,6 +35,7 @@ from app.conversations_queries import (
     insert_user_message,
     list_conversations,
     mark_stale_streaming_messages_as_failed,
+    record_tool_activity,
     update_conversation,
 )
 from tests.fakes import FakeConnection, FakeConversationsConnection
@@ -282,6 +283,51 @@ def test_multiple_regenerates_keep_incrementing_attempt_number():
     assert conn.messages_by_id[third_id]["attempt_number"] == 3
     assert conn.messages_by_id[second_id]["is_active"] is False
     assert conn.messages_by_id[third_id]["is_active"] is True
+
+
+# ---------------------------------------------------------------------------
+# record_tool_activity (Step 12 Sub-step 3B)
+# ---------------------------------------------------------------------------
+
+
+def test_record_tool_activity_persists_tool_calls_and_citations():
+    conn = FakeConversationsConnection()
+    conversation_id = create_conversation(conn)
+    user_message_id = insert_user_message(conn, conversation_id, "hi")
+    message_id = create_streaming_assistant_placeholder(
+        conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini"
+    )
+    tool_calls = [{"tool_name": "get_dataset_summary", "arguments": {"dataset_id": 1}, "summary": "ok", "error": False}]
+    citations = [{"tool_name": "get_dataset_summary", "summary": "ok"}]
+
+    rowcount = record_tool_activity(conn, message_id, tool_calls, citations)
+
+    assert rowcount == 1
+    assert conn.messages_by_id[message_id]["tool_calls"] == tool_calls
+    assert conn.messages_by_id[message_id]["citations"] == citations
+
+
+def test_record_tool_activity_does_not_touch_status_or_content():
+    conn = FakeConversationsConnection()
+    conversation_id = create_conversation(conn)
+    user_message_id = insert_user_message(conn, conversation_id, "hi")
+    message_id = create_streaming_assistant_placeholder(
+        conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini"
+    )
+    finalize_assistant_message(conn, message_id, "final answer", "completed", None, "stop", None)
+
+    record_tool_activity(conn, message_id, [{"tool_name": "x"}], None)
+
+    assert conn.messages_by_id[message_id]["status"] == "completed"
+    assert conn.messages_by_id[message_id]["content"] == "final answer"
+
+
+def test_record_tool_activity_returns_zero_when_message_absent():
+    conn = FakeConversationsConnection()
+
+    rowcount = record_tool_activity(conn, 999, [{"tool_name": "x"}], None)
+
+    assert rowcount == 0
 
 
 # ---------------------------------------------------------------------------

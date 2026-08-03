@@ -5,7 +5,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -20,6 +20,7 @@ from app.conversations_queries import (
     get_conversation_with_active_messages,
     insert_user_message,
     list_conversations,
+    record_tool_activity,
     update_conversation,
 )
 from app.datasets_queries import (
@@ -74,6 +75,7 @@ from app.services.case_retrieval import (
     list_case_summaries,
     search_by_text,
 )
+from app.services.answer_classifier import looks_like_diagnostic_question
 from app.services.case_similarity import ScoredCase, case_similarity_label
 from app.services.chat_provider import (
     ChatDeltaEvent,
@@ -81,6 +83,7 @@ from app.services.chat_provider import (
     ChatProvider,
     ChatProviderError,
     ChatProviderTimeout,
+    ChatToolCallEvent,
     OpenAIChatProvider,
 )
 from app.services.embedding_provider import EmbeddingProvider, OpenAIEmbeddingProvider
@@ -90,6 +93,13 @@ from app.services.rule_engine import (
     ANALYSIS_TYPE,
     RULE_VERSION,
     evaluate_battery_should_discharge_but_did_not,
+)
+from app.services.tool_registry import (
+    TOOL_SCHEMAS,
+    ToolExecutionError,
+    UnknownToolError,
+    execute_tool,
+    summarize_tool_result,
 )
 
 app = FastAPI()
@@ -124,6 +134,111 @@ _PUBLIC_ERROR_MESSAGES = {
 
 def _public_error_message(code: Optional[str]) -> str:
     return _PUBLIC_ERROR_MESSAGES.get(code, "assistant response failed, please try again")
+
+
+# Step 12 Sub-step 3B (docs/step12_substep3b_plan.md section 1): closed
+# registry + deterministic capability guard is necessary but the guard
+# itself lives in generate() (whether zero tool calls were made for a
+# diagnostic-classified message); these are the fixed, backend-enforced
+# caps on tool-calling that exist independent of what the provider API's
+# own limits might be. Fail closed: hitting the cap produces a
+# _tool_cap_exceeded_answer(), never a silent truncation.
+MAX_TOOL_ROUNDS = 3
+MAX_TOOL_CALLS = 5
+
+# Conversation history assembly (docs/step12_substep3b_plan.md section 4):
+# message-count cap first, then a total-character cap trims further
+# oldest-first. Fixed constants, not user-configurable in this slice.
+CONVERSATION_HISTORY_MAX_MESSAGES = 20
+CONVERSATION_HISTORY_MAX_TOTAL_CHARS = 8000
+
+# role_mode only changes tone/depth/information density in the system
+# prompt -- it must never change tool eligibility, evidence requirements,
+# or Internal Knowledge Only enforcement (docs/step12_substep3b_plan.md
+# section 3). Reuses the same 4 values already accepted by the DB CHECK
+# constraint and the RoleMode Literal in schemas.py; no new mode is added.
+ROLE_MODE_FRAMING = {
+    "operator": "Prioritize concrete, actionable next steps; minimize jargon; assume no deep EMS/battery engineering background.",
+    "engineer": "Full technical detail is expected; use precise terminology (SOC, C-rate, BMS protection logic) without simplification.",
+    "executive": "Lead with business/operational impact and risk framing; keep technical detail available but secondary; avoid unexplained jargon.",
+    "training": "Explain underlying concepts and reasoning in more depth than an operator/engineer answer would normally include, even at the cost of length -- this mode is explicitly for learning, not fast lookup.",
+}
+
+# MVP1_RULES.md section 8 / ADR-006 seven-part structure, expressed as
+# fixed Markdown headings (Option A: free-text streaming, not structured
+# JSON output -- see docs/step12_substep3b_plan.md section 2). Order
+# matters for the system prompt instruction below; _validate_seven_part_structure
+# only checks presence, not order, since enforcing order server-side
+# without another model round is not worth the complexity for MVP.
+SEVEN_PART_HEADINGS = [
+    "## Confirmed facts / Finding",
+    "## Evidence",
+    "## Possible causes",
+    "## General engineering background",
+    "## Suggested actions / Next checks",
+    "## Confidence",
+    "## Citations",
+]
+
+_SEVEN_PART_INSTRUCTION = (
+    "When your answer explains a diagnosis, cites a similar past case, or references "
+    "retrieved internal documents, structure your response using exactly these seven "
+    "Markdown headings, in this order: "
+    + ", ".join(h.lstrip("# ") for h in SEVEN_PART_HEADINGS)
+    + ". Confirmed facts and Evidence may only come from tool results returned in this "
+    "conversation -- never from your own general knowledge. Possible causes must be "
+    "explicitly marked as hypotheses. General engineering background must be kept "
+    "separate from Confirmed facts and never presented as a specific fact about this "
+    "project. If no tool result supports a claim, say the internal data is insufficient "
+    "rather than guessing."
+)
+
+
+def _validate_seven_part_structure(content: str) -> bool:
+    return all(heading in content for heading in SEVEN_PART_HEADINGS)
+
+
+# Deterministic, backend-authored fallback answers (never routed through
+# the model) for the two fail-closed paths in generate(): the capability
+# guard rejecting a zero-tool-call answer to a diagnostic-classified
+# message, and the tool-call round/call cap being reached. Both already
+# use the seven-part structure so downstream rendering never has to
+# special-case them.
+INSUFFICIENT_DATA_ANSWER = (
+    "## Confirmed facts / Finding\n"
+    "目前內部資料不足，無法針對此問題提供可驗證的結論。\n\n"
+    "## Evidence\n"
+    "（無：未取得任何內部資料集、文件或案件證據）\n\n"
+    "## Possible causes\n"
+    "（無法在缺乏證據的情況下列出可能原因）\n\n"
+    "## General engineering background\n"
+    "（無）\n\n"
+    "## Suggested actions / Next checks\n"
+    "請提供更具體的資料集 ID、文件名稱或案件編號，以便查詢對應的內部資料。\n\n"
+    "## Confidence\n"
+    "insufficient data\n\n"
+    "## Citations\n"
+    "（無）"
+)
+
+
+def _tool_cap_exceeded_answer() -> str:
+    return (
+        "## Confirmed facts / Finding\n"
+        "已達到本次回答可查詢的內部資料工具呼叫上限，以下結論可能不完整。\n\n"
+        "## Evidence\n"
+        "（部分：僅包含已成功執行的工具查詢結果）\n\n"
+        "## Possible causes\n"
+        "（可能因證據不完整而未能列出）\n\n"
+        "## General engineering background\n"
+        "（無）\n\n"
+        "## Suggested actions / Next checks\n"
+        "建議縮小問題範圍（例如指定單一 dataset 或案件），以便在工具呼叫上限內取得完整證據。\n\n"
+        "## Confidence\n"
+        "low\n\n"
+        "## Citations\n"
+        "（部分，請參考已執行的工具呼叫）"
+    )
 
 # Step 10 MVP: PDF is the only format with a working parse/chunk/embed
 # pipeline (app/services/pdf_parser.py). TXT/MD were mentioned in early Step
@@ -506,15 +621,35 @@ def _sse_frame(event: str, data: dict) -> str:
 def _build_provider_messages(
     prior_messages: list[dict], user_content: str, role_mode: Optional[str]
 ) -> list[dict]:
-    """Maps this conversation's active message history plus the new user
-    turn into the list[dict] shape AsyncOpenAI expects. No seven-part
-    response structure or tool-calling framing here -- that is Sub-step 3B
-    scope (docs/step12_substep3_plan.md section 9); this is intentionally
-    the simplest correct mapping for 3A."""
-    messages: list[dict] = []
-    if role_mode is not None:
-        messages.append({"role": "system", "content": f"Respond in {role_mode} mode."})
-    for m in prior_messages:
+    """Maps this conversation's message history plus the new user turn into
+    the list[dict] shape AsyncOpenAI expects (docs/step12_substep3b_plan.md
+    section 4):
+      - only status='completed' messages are included (excludes
+        streaming/failed/aborted; superseded regenerate attempts are
+        already excluded upstream since prior_messages only ever contains
+        is_active=true rows from get_conversation_with_active_messages);
+      - capped to the most recent CONVERSATION_HISTORY_MAX_MESSAGES,
+        then further trimmed oldest-first if their combined content still
+        exceeds CONVERSATION_HISTORY_MAX_TOTAL_CHARS;
+      - original chronological order is preserved throughout.
+    role_mode only adds tone/depth framing to the system prompt (section 3)
+    -- it never changes tool eligibility or evidence requirements, both of
+    which are enforced entirely in generate(), independent of this
+    function."""
+    completed_only = [m for m in prior_messages if m["status"] == "completed"]
+    windowed = completed_only[-CONVERSATION_HISTORY_MAX_MESSAGES:]
+
+    total_chars = sum(len(m["content"]) for m in windowed)
+    while len(windowed) > 1 and total_chars > CONVERSATION_HISTORY_MAX_TOTAL_CHARS:
+        dropped = windowed.pop(0)
+        total_chars -= len(dropped["content"])
+
+    system_parts = [_SEVEN_PART_INSTRUCTION]
+    if role_mode is not None and role_mode in ROLE_MODE_FRAMING:
+        system_parts.append(ROLE_MODE_FRAMING[role_mode])
+
+    messages: list[dict] = [{"role": "system", "content": " ".join(system_parts)}]
+    for m in windowed:
         messages.append({"role": m["role"], "content": m["content"]})
     messages.append({"role": "user", "content": user_content})
     return messages
@@ -527,6 +662,8 @@ def _finalize_with_fallback(
     error_message: Optional[str],
     finish_reason: Optional[str],
     usage: Optional[dict],
+    tool_calls: Optional[list[dict]] = None,
+    citations: Optional[list[dict]] = None,
 ) -> bool:
     """Phase C. Tries a fresh connection twice before giving up (see
     docs/step12_substep3a_plan.md section 3): the common transient-failure
@@ -535,13 +672,21 @@ def _finalize_with_fallback(
     until startup reconciliation or manual intervention -- Sub-step 3C
     scope), not a silently swallowed error. Returns True if the row was
     confirmed finalized (this call or a prior one already did it), False
-    if both attempts failed."""
+    if both attempts failed.
+
+    Step 12 Sub-step 3B: also persists tool_calls/citations (if given) via
+    record_tool_activity, in the same connection and same fresh-connection
+    retry loop as finalize_assistant_message -- not a separate function
+    with its own fallback logic, and no change to
+    finalize_assistant_message's own signature."""
     for attempt in (1, 2):
         try:
             with get_connection() as conn:
                 rowcount = finalize_assistant_message(
                     conn, message_id, content, status, error_message, finish_reason, usage
                 )
+                if tool_calls is not None or citations is not None:
+                    record_tool_activity(conn, message_id, tool_calls, citations)
                 conn.commit()
             if rowcount == 0:
                 # Already finalized by something else (e.g. a race with
@@ -556,37 +701,241 @@ def _finalize_with_fallback(
     return False
 
 
-async def generate(message_id: int, provider: ChatProvider, messages: list[dict], request: Request):
-    """Phase B + C. One generator, one finalize call site: every exit from
-    the loop below (normal completion, idle/overall timeout, provider
-    error, any other exception, or disconnect) assigns status/error_message
-    and falls through to the same _finalize_with_fallback call -- no
-    branch returns or re-raises past it. See
-    docs/step12_slice4_plan.md sections 5 and 8."""
+class _StreamAborted(Exception):
+    """Internal control-flow signal only (docs/step12_slice4_plan.md's
+    disconnect handling, extended to break out of the nested per-round
+    loop below) -- never surfaced to callers or the DB."""
+
+
+async def generate(
+    message_id: int,
+    provider: ChatProvider,
+    messages: list[dict],
+    request: Request,
+    is_diagnostic: bool,
+    build_embedding_provider: Callable[[], EmbeddingProvider],
+):
+    """Phase B + C. Step 12 Sub-step 3B, revised after review: **two
+    strictly separate phases**, not one interleaved loop, to close an
+    Internal Knowledge Only gap the first draft had (orchestration-round
+    text was streamed live token-by-token before it was known whether that
+    text would end up discarded by a tool call, the capability guard, or
+    the cap -- meaning the client could see model text the DB never ends
+    up persisting, and worse, text that was never actually evidence-backed).
+
+    Phase 1 (orchestration rounds, tools enabled): every round's content
+    deltas are buffered locally and NEVER yielded as `token` SSE frames --
+    only `tool_call`/`tool_result` frames are ever emitted during this
+    phase. A round's buffered text is unconditionally discarded once the
+    round ends; it is never the source of the final persisted content.
+
+    Phase 2 (final synthesis, tools disabled): reached only when
+    orchestration ends in a genuinely trustworthy state (a round naturally
+    stopped without requesting a tool call, and the capability guard does
+    not apply). This is the *only* place `token` SSE frames are ever
+    emitted from provider output, and `accumulated` here is built
+    exclusively from this round's own deltas -- so the exact text streamed
+    to the client is always exactly what gets persisted. The two
+    backend-authored fallback answers (capability-guard rejection, cap
+    exceeded) skip Phase 2 entirely and stream their fixed string directly
+    -- also exactly matching what gets persisted, since it's the same
+    string in both places by construction.
+
+    Still exactly one finalize call site: every exit path (normal
+    completion, cap exceeded, capability-guard rejection, idle/overall
+    timeout, provider error, any other exception, or disconnect) assigns
+    status/error_message/finish_reason and falls through to the same
+    _finalize_with_fallback call. ChatProvider itself never sees SSE --
+    all event: tool_call/tool_result/token framing happens here, matching
+    the layering already established in Slice 1."""
     yield _sse_frame("message_started", {"message_id": message_id, "attempt_number": 1})
 
     accumulated = ""
     status, error_message, finish_reason, usage = "completed", None, None, None
+    tool_call_log: list[dict] = []
+    total_tool_calls = 0
+    working_messages = list(messages)
     start = time.monotonic()
+    outcome: Optional[str] = None  # "synthesize" | "insufficient_data" | "capped"
+    # Lazy: only the two search_* tools ever need an embedding provider,
+    # and most messages call neither (this is a real fix, not a
+    # micro-optimization -- eagerly building a real OpenAIEmbeddingProvider
+    # for every message, even ones that never call a search tool, wastes a
+    # client construction and, in this dev environment, actually raised
+    # from a broken SSL_CERT_FILE env var before this fix).
+    embedding_provider_holder: list[EmbeddingProvider] = []
+
+    def _get_embedding_provider() -> EmbeddingProvider:
+        if not embedding_provider_holder:
+            embedding_provider_holder.append(build_embedding_provider())
+        return embedding_provider_holder[0]
+
     try:
-        stream = provider.stream_chat(messages, tools=None)
-        while True:
-            if await request.is_disconnected():
-                status, error_message = "aborted", None
-                break
-            try:
-                event = await asyncio.wait_for(stream.__anext__(), timeout=IDLE_TOKEN_TIMEOUT_SECONDS)
-            except StopAsyncIteration:
-                break
-            except asyncio.TimeoutError:
-                raise ChatProviderTimeout("idle timeout waiting for next token")
-            if time.monotonic() - start > OVERALL_GENERATION_TIMEOUT_SECONDS:
-                raise ChatProviderTimeout("overall generation timeout")
-            if isinstance(event, ChatDeltaEvent):
-                accumulated += event.delta
-                yield _sse_frame("token", {"delta": event.delta})
-            elif isinstance(event, ChatFinishEvent):
-                finish_reason, usage = event.finish_reason, event.usage
+        # ---------------------------------------------------------------
+        # Phase 1: tool orchestration rounds. tools=TOOL_SCHEMAS. Content
+        # is buffered per round and never yielded as SSE here.
+        # ---------------------------------------------------------------
+        for round_num in range(1, MAX_TOOL_ROUNDS + 1):
+            round_content = ""
+            tool_fragments: dict[int, dict] = {}
+            tool_order: list[int] = []
+            round_finish_reason: Optional[str] = None
+            round_usage: Optional[dict] = None
+
+            stream = provider.stream_chat(working_messages, tools=TOOL_SCHEMAS)
+            while True:
+                if await request.is_disconnected():
+                    raise _StreamAborted()
+                try:
+                    event = await asyncio.wait_for(stream.__anext__(), timeout=IDLE_TOKEN_TIMEOUT_SECONDS)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    raise ChatProviderTimeout("idle timeout waiting for next token")
+                if time.monotonic() - start > OVERALL_GENERATION_TIMEOUT_SECONDS:
+                    raise ChatProviderTimeout("overall generation timeout")
+
+                if isinstance(event, ChatDeltaEvent):
+                    # buffered ONLY -- this round may still turn into a
+                    # tool call or be discarded by the capability guard, so
+                    # its text is not yet trustworthy enough to show the
+                    # client (Internal Knowledge Only fix).
+                    round_content += event.delta
+                elif isinstance(event, ChatToolCallEvent):
+                    if event.index not in tool_fragments:
+                        tool_fragments[event.index] = {"id": None, "name": None, "arguments": ""}
+                        tool_order.append(event.index)
+                    if event.tool_call_id is not None:
+                        tool_fragments[event.index]["id"] = event.tool_call_id
+                    if event.name is not None:
+                        tool_fragments[event.index]["name"] = event.name
+                    tool_fragments[event.index]["arguments"] += event.arguments_delta
+                elif isinstance(event, ChatFinishEvent):
+                    round_finish_reason, round_usage = event.finish_reason, event.usage
+
+            if round_finish_reason == "tool_calls" and tool_order:
+                total_tool_calls += len(tool_order)
+                if round_num == MAX_TOOL_ROUNDS or total_tool_calls >= MAX_TOOL_CALLS:
+                    # round_content (if any) is discarded here -- never sent, never persisted.
+                    outcome = "capped"
+                    break
+
+                # round_content (if any -- rare for a tool-calling round) is
+                # discarded here too; only the tool call itself carries forward.
+                working_messages.append(
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": tool_fragments[idx]["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tool_fragments[idx]["name"],
+                                    "arguments": tool_fragments[idx]["arguments"],
+                                },
+                            }
+                            for idx in tool_order
+                        ],
+                    }
+                )
+                for idx in tool_order:
+                    name = tool_fragments[idx]["name"]
+                    tool_call_id = tool_fragments[idx]["id"]
+                    raw_args = tool_fragments[idx]["arguments"]
+                    try:
+                        args = json.loads(raw_args) if raw_args else {}
+                    except ValueError:
+                        args = {}
+                    yield _sse_frame("tool_call", {"tool_name": name, "arguments": args})
+                    try:
+                        with get_connection() as tool_conn:
+                            result = execute_tool(tool_conn, _get_embedding_provider, name, args)
+                        summary = summarize_tool_result(name, result)
+                        tool_call_log.append({"tool_name": name, "arguments": args, "summary": summary, "error": False})
+                        yield _sse_frame("tool_result", {"tool_name": name, "summary": summary})
+                        working_messages.append(
+                            {"role": "tool", "tool_call_id": tool_call_id, "content": json.dumps(result)}
+                        )
+                    except UnknownToolError:
+                        summary = f"unknown tool: {name}"
+                        log.warning("model requested unknown tool: %s", name)
+                        tool_call_log.append({"tool_name": name, "arguments": args, "summary": summary, "error": True})
+                        yield _sse_frame("tool_result", {"tool_name": name, "summary": summary})
+                        working_messages.append(
+                            {"role": "tool", "tool_call_id": tool_call_id, "content": json.dumps({"error": summary})}
+                        )
+                    except ToolExecutionError:
+                        summary = f"{name} failed"
+                        log.exception("tool execution failed: %s", name)
+                        tool_call_log.append({"tool_name": name, "arguments": args, "summary": summary, "error": True})
+                        yield _sse_frame("tool_result", {"tool_name": name, "summary": summary})
+                        working_messages.append(
+                            {"role": "tool", "tool_call_id": tool_call_id, "content": json.dumps({"error": summary})}
+                        )
+                continue
+
+            # Round ended without requesting a tool call -- round_content is
+            # STILL discarded (never streamed); orchestration is over, and
+            # the next step decides what actually gets shown/persisted.
+            finish_reason, usage = round_finish_reason, round_usage
+            if is_diagnostic and not tool_call_log:
+                outcome = "insufficient_data"
+            else:
+                outcome = "synthesize"
+            break
+        else:
+            # exhausted MAX_TOOL_ROUNDS without a terminal round (safety net;
+            # the round_num == MAX_TOOL_ROUNDS branch above already covers
+            # the expected path to this same outcome)
+            outcome = "capped"
+
+        # ---------------------------------------------------------------
+        # Phase 2: resolve the outcome. Only "synthesize" ever calls the
+        # provider again (with tools=None); the other two outcomes stream
+        # a fixed, backend-authored string that is byte-for-byte identical
+        # to what gets persisted -- there is no path where the client sees
+        # something different from what the DB ends up storing.
+        # ---------------------------------------------------------------
+        if outcome == "insufficient_data":
+            accumulated = INSUFFICIENT_DATA_ANSWER
+            finish_reason = "insufficient_data"
+            yield _sse_frame("token", {"delta": accumulated})
+        elif outcome == "capped":
+            accumulated = _tool_cap_exceeded_answer()
+            finish_reason = "tool_cap_exceeded"
+            yield _sse_frame("token", {"delta": accumulated})
+        else:  # "synthesize"
+            stream = provider.stream_chat(working_messages, tools=None)
+            while True:
+                if await request.is_disconnected():
+                    raise _StreamAborted()
+                try:
+                    event = await asyncio.wait_for(stream.__anext__(), timeout=IDLE_TOKEN_TIMEOUT_SECONDS)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    raise ChatProviderTimeout("idle timeout waiting for next token")
+                if time.monotonic() - start > OVERALL_GENERATION_TIMEOUT_SECONDS:
+                    raise ChatProviderTimeout("overall generation timeout")
+
+                if isinstance(event, ChatDeltaEvent):
+                    # the ONLY place provider content is streamed live --
+                    # accumulated is built exclusively from this round, so
+                    # it always matches exactly what the client received.
+                    accumulated += event.delta
+                    yield _sse_frame("token", {"delta": event.delta})
+                elif isinstance(event, ChatFinishEvent):
+                    finish_reason, usage = event.finish_reason, event.usage
+                # ChatToolCallEvent is not expected here (tools=None was
+                # passed); if a provider somehow still emits one, it is
+                # silently ignored -- ignoring is deliberate: tools are
+                # disabled for this round by contract, so any such event
+                # cannot be trusted as a real, executable tool call.
+
+        if tool_call_log and not _validate_seven_part_structure(accumulated):
+            log.warning("message %s: assistant answer missing expected seven-part headings", message_id)
+    except _StreamAborted:
+        status, error_message = "aborted", None
     except ChatProviderTimeout:
         log.exception("chat provider timed out for message %s", message_id)
         status, error_message = "failed", "provider_timeout"
@@ -598,7 +947,15 @@ async def generate(message_id: int, provider: ChatProvider, messages: list[dict]
         log.exception("unexpected error in chat generation for message %s", message_id)
         status, error_message = "failed", "provider_error"
 
-    finalized = _finalize_with_fallback(message_id, accumulated, status, error_message, finish_reason, usage)
+    citations = (
+        [{"tool_name": c["tool_name"], "summary": c["summary"]} for c in tool_call_log if not c["error"]]
+        if tool_call_log
+        else None
+    )
+    finalized = _finalize_with_fallback(
+        message_id, accumulated, status, error_message, finish_reason, usage,
+        tool_calls=tool_call_log or None, citations=citations,
+    )
     if not await request.is_disconnected():
         if status == "completed":
             yield _sse_frame(
@@ -637,9 +994,10 @@ async def post_message(conversation_id: int, body: PostMessageRequest, request: 
         conn.commit()
     # connection closed here -- before generate() is ever called.
 
+    is_diagnostic = looks_like_diagnostic_question(content)
     provider_messages = _build_provider_messages(prior_messages, content, role_mode)
     return StreamingResponse(
-        generate(assistant_message_id, provider, provider_messages, request),
+        generate(assistant_message_id, provider, provider_messages, request, is_diagnostic, _build_embedding_provider),
         media_type="text/event-stream",
     )
 

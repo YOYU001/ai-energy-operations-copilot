@@ -1,3 +1,4 @@
+import json
 import math
 from datetime import datetime, timezone
 
@@ -602,6 +603,20 @@ class FakeConversationsConnection:
                 row["is_active"] = False
                 row["updated_at"] = datetime.now(timezone.utc)
             return FakeExecResult(rowcount=len(active))
+
+        if "UPDATE chat_messages" in sql and "SET tool_calls = CAST" in sql:
+            row = self.messages_by_id.get(params.get("message_id"))
+            if row is None:
+                return FakeExecResult(rowcount=0)
+            # real JSONB columns round-trip already-deserialized Python
+            # objects (SQLAlchemy/psycopg2), not the raw json.dumps() string
+            # the caller passed in as a bind parameter -- mirror that here.
+            tool_calls_param = params.get("tool_calls")
+            citations_param = params.get("citations")
+            row["tool_calls"] = json.loads(tool_calls_param) if tool_calls_param is not None else None
+            row["citations"] = json.loads(citations_param) if citations_param is not None else None
+            row["updated_at"] = datetime.now(timezone.utc)
+            return FakeExecResult(rowcount=1)
 
         if "interrupted by server restart" in sql:
             affected = [m for m in self.messages_by_id.values() if m.get("status") == "streaming"]

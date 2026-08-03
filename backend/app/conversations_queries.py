@@ -329,6 +329,40 @@ def create_regenerate_attempt(
     return new_id
 
 
+def record_tool_activity(
+    conn,
+    message_id: int,
+    tool_calls: Optional[list[dict]],
+    citations: Optional[list[dict]],
+) -> int:
+    """Step 12 Sub-step 3B: persists this message's tool-call audit trail
+    and structured citations into the tool_calls/citations JSONB columns
+    (added by the Sub-step 1 migration, unused until this function).
+    Deliberately a separate function rather than a new parameter on
+    finalize_assistant_message -- keeps that function single-purpose
+    (status-transition only), matching the earlier decision not to widen
+    its signature. Callers run this in the same connection/transaction as
+    finalize_assistant_message, after it, and commit once for both.
+    Returns rows affected (0 or 1)."""
+    result = conn.execute(
+        text(
+            """
+            UPDATE chat_messages
+            SET tool_calls = CAST(:tool_calls AS JSONB),
+                citations = CAST(:citations AS JSONB),
+                updated_at = now()
+            WHERE id = :message_id
+            """
+        ),
+        {
+            "message_id": message_id,
+            "tool_calls": json.dumps(tool_calls) if tool_calls is not None else None,
+            "citations": json.dumps(citations) if citations is not None else None,
+        },
+    )
+    return result.rowcount
+
+
 def mark_stale_streaming_messages_as_failed(conn) -> int:
     """Mark every message still 'streaming' as 'failed'. When/how often
     this is invoked (e.g. once at backend startup) is lifecycle wiring for

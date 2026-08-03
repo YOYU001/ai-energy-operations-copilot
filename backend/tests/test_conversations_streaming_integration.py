@@ -89,10 +89,14 @@ def test_phase_a_connection_closed_before_phase_b_starts(monkeypatch, seeded_con
     )
 
     assert response.status_code == 200
-    assert len(checked_out_during_phase_b) == 1
+    # Step 12 Sub-step 3B: stream_chat is called at least once (Phase 1
+    # tool-orchestration round) and, since this message has no tool call,
+    # a second time (Phase 2 final synthesis, tools=None) -- both calls
+    # happen after Phase A's connection already closed.
+    assert len(checked_out_during_phase_b) >= 1
     # Phase A's connection must already be back in the pool by the time
-    # Phase B's provider call starts -- no net increase over baseline.
-    assert checked_out_during_phase_b[0] <= baseline
+    # every one of these provider calls starts -- no net increase over baseline.
+    assert all(count <= baseline for count in checked_out_during_phase_b)
 
 
 def test_phase_c_finalize_persists_against_real_db(monkeypatch, seeded_conversation):

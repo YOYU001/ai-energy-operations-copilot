@@ -27,6 +27,7 @@ def run_async(coro):
 @dataclass
 class FakeDelta:
     content: Optional[str] = None
+    tool_calls: Optional[list] = None
 
 
 @dataclass

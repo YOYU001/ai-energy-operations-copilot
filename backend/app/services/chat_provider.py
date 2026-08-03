@@ -13,8 +13,15 @@ per-token timeouts matter -- both are native to an async generator and
 would require extra cross-thread signaling to approximate with a sync
 client run in a worker thread.
 
-This module implements no DB access, no FastAPI route, no SSE framing, and
-no tool-calling -- it is deliberately usable and testable standalone.
+This module implements no DB access, no FastAPI route, and no SSE framing
+-- it is deliberately usable and testable standalone. Step 12 Sub-step 3B
+adds ChatToolCallEvent and the delta.tool_calls parsing branch below (a
+real gap found in the original 3A implementation: tools was already
+forwarded to the API call, but nothing read tool-call deltas back out of
+the response, so any tool call the model made was silently dropped).
+Assembling complete tool calls from fragments and deciding what to do with
+them is still entirely the caller's (app/main.py's) responsibility -- this
+module only yields raw per-fragment events, never SSE frames.
 """
 
 from __future__ import annotations
@@ -34,7 +41,26 @@ class ChatFinishEvent:
     usage: Optional[dict]  # {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int} or None
 
 
-ChatStreamEvent = Union[ChatDeltaEvent, ChatFinishEvent]
+@dataclass(frozen=True)
+class ChatToolCallEvent:
+    """One fragment of one tool call. OpenAI streams tool-call arguments as
+    partial JSON string fragments grouped by `index` (position among the
+    tool calls in this round) -- `tool_call_id` and `name` are only
+    non-None on the FIRST fragment for a given index; every later fragment
+    for that same call carries id=None/name=None and only a further
+    arguments_delta piece. Callers must accumulate by `index` (not by
+    tool_call_id, which is only known once) until the round's
+    ChatFinishEvent(finish_reason='tool_calls') signals the round is
+    complete, then use whichever fragment's tool_call_id was non-None as
+    the call's real id."""
+
+    index: int
+    tool_call_id: Optional[str]
+    name: Optional[str]
+    arguments_delta: str
+
+
+ChatStreamEvent = Union[ChatDeltaEvent, ChatFinishEvent, ChatToolCallEvent]
 
 
 class ChatProviderError(RuntimeError):
@@ -101,6 +127,14 @@ class OpenAIChatProvider:
                     continue
                 if choice.delta is not None and choice.delta.content:
                     yield ChatDeltaEvent(delta=choice.delta.content)
+                if choice.delta is not None and choice.delta.tool_calls:
+                    for tc in choice.delta.tool_calls:
+                        yield ChatToolCallEvent(
+                            index=tc.index,
+                            tool_call_id=tc.id,
+                            name=tc.function.name if tc.function is not None else None,
+                            arguments_delta=(tc.function.arguments or "") if tc.function is not None else "",
+                        )
                 if choice.finish_reason is not None:
                     usage = getattr(chunk, "usage", None)
                     yield ChatFinishEvent(
