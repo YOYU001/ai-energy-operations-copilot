@@ -17,6 +17,7 @@ upsert_case_record directly rather than through an API.
 
 from fastapi.testclient import TestClient
 
+import app.main as main_module
 from app.conversations_queries import (
     create_regenerate_attempt,
     create_streaming_assistant_placeholder,
@@ -392,3 +393,68 @@ def test_get_conversation_messages_excludes_superseded_regenerate_attempts():
     assert first_attempt_id not in ids
     assert second_attempt_id in ids
     assert len(body) == 2  # user message + the one active assistant attempt
+
+
+# ---------------------------------------------------------------------------
+# POST /conversations/{id}/messages -- Phase A validation only (404/400).
+# The 200/streaming happy path, provider errors, timeouts, and disconnect
+# are exercised against generate() directly in test_chat_streaming.py, not
+# through TestClient (which buffers streaming responses). This endpoint
+# uses get_connection() directly, not Depends(get_db_dependency) (see
+# docs/step12_substep3a_plan.md section 6), so these tests monkeypatch
+# app.main.get_connection instead of the FastAPI dependency override.
+# ---------------------------------------------------------------------------
+
+
+class _FakeConnCtx:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __enter__(self):
+        return self._conn
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def _use_fake_get_connection(monkeypatch, conn: FakeConversationsConnection) -> None:
+    monkeypatch.setattr(main_module, "get_connection", lambda: _FakeConnCtx(conn))
+
+
+def _boom_get_connection(monkeypatch) -> None:
+    def _boom():
+        raise AssertionError("get_connection must not be called on this path")
+
+    monkeypatch.setattr(main_module, "get_connection", _boom)
+
+
+def test_post_message_404_when_conversation_absent(monkeypatch):
+    conn = FakeConversationsConnection()
+    _use_fake_get_connection(monkeypatch, conn)
+
+    response = client.post("/conversations/999/messages", json={"content": "hello"})
+
+    assert response.status_code == 404
+
+
+def test_post_message_404_when_conversation_archived(monkeypatch):
+    conn = FakeConversationsConnection()
+    _use_fake_connection(conn)
+    try:
+        client.post("/conversations", json={})  # conversation_id = 1
+        client.delete("/conversations/1")
+    finally:
+        _clear_override()
+
+    _use_fake_get_connection(monkeypatch, conn)
+    response = client.post("/conversations/1/messages", json={"content": "hello"})
+
+    assert response.status_code == 404
+
+
+def test_post_message_400_when_content_blank(monkeypatch):
+    _boom_get_connection(monkeypatch)  # must reject before ever touching the DB
+
+    response = client.post("/conversations/1/messages", json={"content": "   "})
+
+    assert response.status_code == 400

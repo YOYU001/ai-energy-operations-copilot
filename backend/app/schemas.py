@@ -299,3 +299,7 @@ class ConversationDetail(BaseModel):
 class ConversationUpdateRequest(BaseModel):
     title: Optional[str] = None
     role_mode: Optional[RoleMode] = None
+
+
+class PostMessageRequest(BaseModel):
+    content: str

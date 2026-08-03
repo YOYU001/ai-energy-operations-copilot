@@ -1,16 +1,24 @@
+import asyncio
+import json
+import logging
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
 from app.case_records_queries import get_case_by_case_id
 from app.conversations_queries import (
     archive_conversation,
     create_conversation,
+    create_streaming_assistant_placeholder,
+    finalize_assistant_message,
     get_conversation_with_active_messages,
+    insert_user_message,
     list_conversations,
     update_conversation,
 )
@@ -53,6 +61,7 @@ from app.schemas import (
     DocumentSummary,
     DocumentUploadResult,
     IngestResult,
+    PostMessageRequest,
     TimeseriesPage,
 )
 from app.services.case_retrieval import (
@@ -66,6 +75,14 @@ from app.services.case_retrieval import (
     search_by_text,
 )
 from app.services.case_similarity import ScoredCase, case_similarity_label
+from app.services.chat_provider import (
+    ChatDeltaEvent,
+    ChatFinishEvent,
+    ChatProvider,
+    ChatProviderError,
+    ChatProviderTimeout,
+    OpenAIChatProvider,
+)
 from app.services.embedding_provider import EmbeddingProvider, OpenAIEmbeddingProvider
 from app.services.hashing import compute_document_content_hash
 from app.services.ingestion_rag import READY_STATUS, ingest_pdf_document
@@ -77,10 +94,36 @@ from app.services.rule_engine import (
 
 app = FastAPI()
 
+log = logging.getLogger(__name__)
+
 # fail-closed safety cap for rule-engine analysis; not a business rule, just an
 # MVP-scale guard against computing a percentile/anomaly scan over an unbounded
 # unpaginated query (see get_dataset_timeseries_for_analysis)
 MAX_ANALYSIS_ROWS = 50_000
+
+# Step 12 Sub-step 3A Slice 4 timeout contract (docs/step12_substep3a_plan.md
+# section 2): one idle-timeout mechanism covers both "waiting for the first
+# token" and "waiting for the next token after N have already arrived";
+# OVERALL_GENERATION_TIMEOUT_SECONDS is a separate wall-clock hard cap on the
+# whole streaming call. Fixed constants, not env-configurable, matching how
+# MAX_ANALYSIS_ROWS above is a hardcoded constant.
+IDLE_TOKEN_TIMEOUT_SECONDS = 15
+OVERALL_GENERATION_TIMEOUT_SECONDS = 60
+
+# Sanitized, stable DB error_message codes -> public-safe SSE/HTTP wording.
+# Three-tier separation (docs/step12_substep3_plan.md section 10): DB stores
+# the code on the left, this dict produces the public string, and the raw
+# exception detail only ever reaches the server log (log.exception calls in
+# generate()), never the DB or the client.
+_PUBLIC_ERROR_MESSAGES = {
+    "provider_timeout": "assistant response failed, please try again",
+    "provider_error": "assistant response failed, please try again",
+    "persistence_failed": "assistant response failed, please try again",
+}
+
+
+def _public_error_message(code: Optional[str]) -> str:
+    return _PUBLIC_ERROR_MESSAGES.get(code, "assistant response failed, please try again")
 
 # Step 10 MVP: PDF is the only format with a working parse/chunk/embed
 # pipeline (app/services/pdf_parser.py). TXT/MD were mentioned in early Step
@@ -443,6 +486,162 @@ def get_conversation_messages(conversation_id: int, conn=Depends(get_db_dependen
     if detail is None:
         raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
     return detail["messages"]
+
+
+def _build_chat_provider() -> ChatProvider:
+    """Factory seam matching _build_embedding_provider(): production calls
+    the real OpenAI-backed provider; tests monkeypatch this so no real API
+    call happens. Resolved once per request (see post_message), before the
+    assistant placeholder is created, so its real provider_name/model_name
+    can be recorded at creation time -- no network I/O happens in
+    OpenAIChatProvider.__init__ itself, so this is safe to call from a
+    synchronous Phase A block."""
+    return OpenAIChatProvider()
+
+
+def _sse_frame(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _build_provider_messages(
+    prior_messages: list[dict], user_content: str, role_mode: Optional[str]
+) -> list[dict]:
+    """Maps this conversation's active message history plus the new user
+    turn into the list[dict] shape AsyncOpenAI expects. No seven-part
+    response structure or tool-calling framing here -- that is Sub-step 3B
+    scope (docs/step12_substep3_plan.md section 9); this is intentionally
+    the simplest correct mapping for 3A."""
+    messages: list[dict] = []
+    if role_mode is not None:
+        messages.append({"role": "system", "content": f"Respond in {role_mode} mode."})
+    for m in prior_messages:
+        messages.append({"role": m["role"], "content": m["content"]})
+    messages.append({"role": "user", "content": user_content})
+    return messages
+
+
+def _finalize_with_fallback(
+    message_id: int,
+    content: str,
+    status: str,
+    error_message: Optional[str],
+    finish_reason: Optional[str],
+    usage: Optional[dict],
+) -> bool:
+    """Phase C. Tries a fresh connection twice before giving up (see
+    docs/step12_substep3a_plan.md section 3): the common transient-failure
+    case (one blip) self-heals; if both attempts fail, this is a logged,
+    documented residual Known Issue (the row stays status='streaming'
+    until startup reconciliation or manual intervention -- Sub-step 3C
+    scope), not a silently swallowed error. Returns True if the row was
+    confirmed finalized (this call or a prior one already did it), False
+    if both attempts failed."""
+    for attempt in (1, 2):
+        try:
+            with get_connection() as conn:
+                rowcount = finalize_assistant_message(
+                    conn, message_id, content, status, error_message, finish_reason, usage
+                )
+                conn.commit()
+            if rowcount == 0:
+                # Already finalized by something else (e.g. a race with
+                # startup reconciliation) -- not a failure of this call.
+                log.info("finalize no-op: message %s already left 'streaming'", message_id)
+            return True
+        except Exception:
+            log.exception("finalize attempt %d failed for message %s", attempt, message_id)
+            # attempt 1 failing falls through to a second try with a brand
+            # new connection (not a retry on the same broken one);
+            # attempt 2 failing falls through to the return False below.
+    return False
+
+
+async def generate(message_id: int, provider: ChatProvider, messages: list[dict], request: Request):
+    """Phase B + C. One generator, one finalize call site: every exit from
+    the loop below (normal completion, idle/overall timeout, provider
+    error, any other exception, or disconnect) assigns status/error_message
+    and falls through to the same _finalize_with_fallback call -- no
+    branch returns or re-raises past it. See
+    docs/step12_slice4_plan.md sections 5 and 8."""
+    yield _sse_frame("message_started", {"message_id": message_id, "attempt_number": 1})
+
+    accumulated = ""
+    status, error_message, finish_reason, usage = "completed", None, None, None
+    start = time.monotonic()
+    try:
+        stream = provider.stream_chat(messages, tools=None)
+        while True:
+            if await request.is_disconnected():
+                status, error_message = "aborted", None
+                break
+            try:
+                event = await asyncio.wait_for(stream.__anext__(), timeout=IDLE_TOKEN_TIMEOUT_SECONDS)
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                raise ChatProviderTimeout("idle timeout waiting for next token")
+            if time.monotonic() - start > OVERALL_GENERATION_TIMEOUT_SECONDS:
+                raise ChatProviderTimeout("overall generation timeout")
+            if isinstance(event, ChatDeltaEvent):
+                accumulated += event.delta
+                yield _sse_frame("token", {"delta": event.delta})
+            elif isinstance(event, ChatFinishEvent):
+                finish_reason, usage = event.finish_reason, event.usage
+    except ChatProviderTimeout:
+        log.exception("chat provider timed out for message %s", message_id)
+        status, error_message = "failed", "provider_timeout"
+    except ChatProviderError:
+        log.exception("chat provider error for message %s", message_id)
+        status, error_message = "failed", "provider_error"
+    except Exception:
+        # catch-all fail-closed path, per docs/step12_substep3_plan.md section 7
+        log.exception("unexpected error in chat generation for message %s", message_id)
+        status, error_message = "failed", "provider_error"
+
+    finalized = _finalize_with_fallback(message_id, accumulated, status, error_message, finish_reason, usage)
+    if not await request.is_disconnected():
+        if status == "completed":
+            yield _sse_frame(
+                "message_completed",
+                {"message_id": message_id, "finish_reason": finish_reason, "usage": usage},
+            )
+        else:
+            yield _sse_frame(
+                "message_failed",
+                {"message_id": message_id, "error": _public_error_message(error_message)},
+            )
+    if not finalized:
+        log.error("message %s left in a non-terminal DB state after two finalize attempts", message_id)
+
+
+@app.post("/conversations/{conversation_id}/messages")
+async def post_message(conversation_id: int, body: PostMessageRequest, request: Request):
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content must not be blank")
+
+    with get_connection() as conn:
+        detail = get_conversation_with_active_messages(conn, conversation_id)
+        if detail is None or detail["conversation"]["archived_at"] is not None:
+            raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
+        role_mode = detail["conversation"]["role_mode"]
+        prior_messages = detail["messages"]
+
+        provider = _build_chat_provider()
+
+        user_message_id = insert_user_message(conn, conversation_id, content)
+        assistant_message_id = create_streaming_assistant_placeholder(
+            conn, conversation_id, user_message_id,
+            attempt_number=1, provider=provider.provider_name, model=provider.model_name,
+        )
+        conn.commit()
+    # connection closed here -- before generate() is ever called.
+
+    provider_messages = _build_provider_messages(prior_messages, content, role_mode)
+    return StreamingResponse(
+        generate(assistant_message_id, provider, provider_messages, request),
+        media_type="text/event-stream",
+    )
 
 
 @app.post("/datasets/upload", response_model=IngestResult)
