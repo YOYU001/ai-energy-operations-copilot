@@ -41,6 +41,7 @@ from app.schemas import (
     CaseSearchRequest,
     CaseSearchResult,
     CaseSummary,
+    ChatMessageSummary,
     ChunkSummary,
     ConversationCreateRequest,
     ConversationDetail,
@@ -426,6 +427,22 @@ def delete_conversation(conversation_id: int, conn=Depends(get_db_dependency)):
         raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
     conn.commit()
     return {"archived": True}
+
+
+@app.get("/conversations/{conversation_id}/messages", response_model=list[ChatMessageSummary])
+def get_conversation_messages(conversation_id: int, conn=Depends(get_db_dependency)):
+    """Read model only -- no message-creation endpoint here. Per
+    docs/step12_substep3a_plan.md, POST /conversations/{id}/messages'
+    approved contract is the future SSE endpoint (Phase A resolves
+    ChatProvider before creating the assistant placeholder); this slice
+    does not introduce a temporary JSON-returning POST at that path that
+    would later have to change shape. Reuses
+    get_conversation_with_active_messages exactly as GET /conversations/{id}
+    does -- same ordering (created_at, id), same is_active=true filter."""
+    detail = get_conversation_with_active_messages(conn, conversation_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"conversation {conversation_id} not found")
+    return detail["messages"]
 
 
 @app.post("/datasets/upload", response_model=IngestResult)

@@ -1,13 +1,28 @@
-"""Step 12 Sub-step 3A slice 2: Conversation CRUD API route tests.
+"""Step 12 Sub-step 3A: Conversation CRUD + Message read model API tests.
 
 Uses FakeConversationsConnection (no real DB) via app.dependency_overrides,
-exactly like test_cases_api.py uses FakeCaseRecordsConnection. This slice
-covers only the 5 CRUD endpoints -- POST /conversations/{id}/messages, SSE,
-and ChatProvider wiring are later slices (docs/step12_substep3a_plan.md).
+exactly like test_cases_api.py uses FakeCaseRecordsConnection.
+
+Slice 2 covers the 5 conversation CRUD endpoints. Slice 3 adds
+GET /conversations/{id}/messages as a read-only message list endpoint --
+per user decision, POST /conversations/{id}/messages is deliberately NOT
+introduced in this slice (its approved contract is the future SSE
+endpoint; see docs/step12_substep3a_plan.md), so Slice 3 test data is
+seeded directly via the existing conversations_queries functions
+(insert_user_message, create_streaming_assistant_placeholder,
+finalize_assistant_message, create_regenerate_attempt) against the fake
+connection, the same way test_cases_api.py seeds rows via
+upsert_case_record directly rather than through an API.
 """
 
 from fastapi.testclient import TestClient
 
+from app.conversations_queries import (
+    create_regenerate_attempt,
+    create_streaming_assistant_placeholder,
+    finalize_assistant_message,
+    insert_user_message,
+)
 from app.db import get_db_dependency
 from app.main import app
 from tests.fakes import FakeConversationsConnection
@@ -281,3 +296,99 @@ def test_delete_conversation_404_when_already_archived():
         _clear_override()
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /conversations/{id}/messages
+# ---------------------------------------------------------------------------
+
+
+def test_get_conversation_messages_empty_when_no_messages():
+    conn = FakeConversationsConnection()
+    _use_fake_connection(conn)
+    try:
+        client.post("/conversations", json={})
+        response = client.get("/conversations/1/messages")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_get_conversation_messages_404_when_conversation_absent():
+    conn = FakeConversationsConnection()
+    _use_fake_connection(conn)
+    try:
+        response = client.get("/conversations/999/messages")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 404
+
+
+def test_get_conversation_messages_ordered_with_role_status_timestamp():
+    conn = FakeConversationsConnection()
+    _use_fake_connection(conn)
+    try:
+        client.post("/conversations", json={})  # conversation_id = 1
+        user_message_id = insert_user_message(conn, 1, "why did battery 12 not discharge?")
+        assistant_message_id = create_streaming_assistant_placeholder(
+            conn, 1, user_message_id, attempt_number=1, provider="openai", model="gpt-4o-mini",
+        )
+        finalize_assistant_message(
+            conn, assistant_message_id, content="because SOC was already low",
+            status="completed", error_message=None, finish_reason="stop", usage=None,
+        )
+        response = client.get("/conversations/1/messages")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+    # ordering: user message (created first) before its assistant reply
+    assert body[0]["id"] == user_message_id
+    assert body[0]["role"] == "user"
+    assert body[0]["status"] == "completed"
+    assert "created_at" in body[0]
+    assert body[1]["id"] == assistant_message_id
+    assert body[1]["role"] == "assistant"
+    assert body[1]["status"] == "completed"
+    assert body[1]["parent_user_message_id"] == user_message_id
+    assert body[1]["provider"] == "openai"
+    assert body[1]["model"] == "gpt-4o-mini"
+    assert body[1]["finish_reason"] == "stop"
+    assert body[1]["completed_at"] is not None
+
+
+def test_get_conversation_messages_excludes_superseded_regenerate_attempts():
+    conn = FakeConversationsConnection()
+    _use_fake_connection(conn)
+    try:
+        client.post("/conversations", json={})  # conversation_id = 1
+        user_message_id = insert_user_message(conn, 1, "question")
+        first_attempt_id = create_streaming_assistant_placeholder(
+            conn, 1, user_message_id, attempt_number=1, provider="openai", model="gpt-4o-mini",
+        )
+        finalize_assistant_message(
+            conn, first_attempt_id, content="first answer",
+            status="completed", error_message=None, finish_reason="stop", usage=None,
+        )
+        second_attempt_id = create_regenerate_attempt(conn, 1, user_message_id, provider="openai", model="gpt-4o-mini")
+        finalize_assistant_message(
+            conn, second_attempt_id, content="second answer",
+            status="completed", error_message=None, finish_reason="stop", usage=None,
+        )
+        response = client.get("/conversations/1/messages")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    ids = [m["id"] for m in body]
+    # only the currently-active attempt is returned -- the superseded first
+    # attempt is excluded (is_active=false), matching GET /conversations/{id}
+    assert first_attempt_id not in ids
+    assert second_attempt_id in ids
+    assert len(body) == 2  # user message + the one active assistant attempt
