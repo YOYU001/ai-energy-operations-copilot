@@ -4,7 +4,7 @@
 打造 **AI Energy Operations Copilot MVP v1**，作為 NVIDIA 面試作品集與 AI 工程能力展示專案。
 
 ## Current Phase
-Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → Step 10：Knowledge Base / RAG（正式版）8 個 sub-step 全數完成並正式結案 → Step 11：Case Similarity — backend、frontend 均已完成並驗收通過 → **Step 12：AI Assistant / Chat UI — Sub-step 1（Conversation Schema / Query Layer）與 Sub-step 2（Route Group Refactor）已完成**。下一步：**Step 12 Sub-step 3 architecture investigation and planning**。
+Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → Step 10：Knowledge Base / RAG（正式版）8 個 sub-step 全數完成並正式結案 → Step 11：Case Similarity — backend、frontend 均已完成並驗收通過 → **Step 12：AI Assistant / Chat UI — backend 已完成並驗收通過（Sub-step 1–3C：Conversation CRUD、Message read API、SSE streaming、controlled tool orchestration、Internal Knowledge Only guard、七段式回答、regenerate lifecycle、startup/read-time recovery，全專案 500 個測試通過）**。下一步：**Step 12 frontend — `/assistant` ChatGPT 風格 Chat UI planning**。
 
 ## Completed
 - 定義 MVP v1 產品範圍、技術棧、Internal Knowledge Only 原則、初版 data schema，以及 Claude Code learning-by-building / 漸進式開發流程。
@@ -43,6 +43,9 @@ Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Documen
 - Step 11 — Case Similarity（backend + frontend，正式結案）：case schema/query/similarity/retrieval service、4 支 API、`/cases` 與 `/cases/[case_id]` frontend，13 筆合成案例已 seed 真實 OpenAI embedding。357 個測試通過，lint/build 皆過。
 - Step 12 Sub-step 1 — Conversation Schema / Query Layer：`conversations`/`chat_messages` guarded migration 與 10 個查詢函式，含 `create_regenerate_attempt` 的 `FOR UPDATE` 併發鎖，已用真實 PostgreSQL 雙連線測試驗證。PR #38，commit e6b4bd1。Details: docs/step12_substep1_plan.md。
 - Step 12 Sub-step 2 — Route Group Refactor：dashboard 頁面搬遷至 `frontend/app/(dashboard)/` 共用 layout，`app/layout.tsx` 只留 root-level 設定。CI 全數通過。PR #39，commit 4e476f6。
+- Step 12 Sub-step 3A — Streaming API：`ChatProvider`（`AsyncOpenAI`）、conversation CRUD、`GET /conversations/{id}/messages` read model、`POST /conversations/{id}/messages` SSE（Phase A/B/C 連線邊界、idle/overall timeout、disconnect→aborted、finalize 兩次重試 fallback）。commit 25f6a49。Details: docs/step12_substep3a_plan.md、docs/step12_slice4_plan.md。
+- Step 12 Sub-step 3B — Controlled Tool Orchestration：closed 5-tool registry、deterministic capability guard（未達診斷門檻零 tool call 即回「資料不足」）、3 rounds／5 calls 上限、七段式 Markdown 回答結構。修正一個真實安全缺口：orchestration round 文字改為全程 buffer、只有 tools=None 的 final synthesis round 才即時串流，確保前端看到的 token 與 DB 最終 content 完全一致。commit 82b1907。Details: docs/step12_substep3b_plan.md。
+- Step 12 Sub-step 3C — Regenerate Lifecycle / Recovery：`POST /conversations/{id}/messages/{message_id}/regenerate`（400/404/409 完整分流，in-flight guard 移入 `create_regenerate_attempt` 的 `FOR UPDATE` 交易內，避免 route pre-check 的 TOCTOU）、FastAPI `lifespan` 啟動時一次性 reconciliation、獨立的讀取時 stale cleanup query primitive（5 分鐘門檻）。全專案 500 個測試通過，含真實 DB 併發測試。commit f087be2。Details: docs/step12_substep3c_plan.md。
 
 ## Important Decisions
 - Frontend：Next.js
@@ -114,7 +117,7 @@ MVP v1 應涵蓋：
 - Step 11 frontend 手機窄螢幕（~752px 寬）已用瀏覽器 responsive mode 驗證過 `/cases` 與 `/cases/[case_id]`（card 排版、長 event_type 換行、matches/differs 標籤、分頁按鈕皆正常），但未涵蓋更窄的手機寬度（如 375px 以下）。
 
 ## Next Step
-**Step 12 Sub-step 3：architecture investigation and planning**（docs/PROJECT_ALIGNMENT_REVIEW.md §9、docs/DEVELOPMENT_WORKFLOW.md 第 6 節）。Sub-step 1（Conversation Schema / Query Layer）與 Sub-step 2（Route Group Refactor）已完成並驗收通過（見 Completed）。Sub-step 3 範圍尚未鎖定——`backend/app/main.py` 目前完全沒有 chat/conversation route，須先做 architecture investigation（讀 docs/MVP1_RULES.md 第 8 節、docs/DECISIONS.md ADR-002、既有 query layer 與 FastAPI dependency/lifespan 設計），再決定是否拆分為 3A（Conversation API、ChatProvider abstraction、SSE lifecycle）／3B（受控 tool orchestration、Internal Knowledge Only、七段式回答）／3C（regenerate、startup reconciliation、錯誤與中斷復原），產出 docs/step12_substep3_plan.md 供確認後才開始實作。
+**Step 12 frontend — `/assistant` ChatGPT 風格 Chat UI planning**。Backend 已完整完成並驗收通過：Conversation CRUD、Message read API、SSE streaming（two-phase 設計確保 token 與 DB content 一致）、controlled tool orchestration、Internal Knowledge Only guard、七段式回答結構、regenerate lifecycle、startup/read-time recovery，全專案 500 個測試通過（見 Completed，Sub-step 1–3C）。下一步：先做前端 architecture investigation + implementation plan（對照 `.claude/rules/frontend/react.md` 的 ChatGPT 風格要求與既有 `lib/api/` 慣例），經確認後才開始實作。
 
 ## Files To Read Next Time
 每次一定要先讀：
