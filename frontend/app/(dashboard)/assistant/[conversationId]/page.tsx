@@ -1,14 +1,15 @@
 import { notFound } from "next/navigation";
 import { ApiError, getConversation } from "@/lib/api/client";
-import MessageList from "./MessageList";
+import ChatThread from "./ChatThread";
 
 export const dynamic = "force-dynamic";
 
-// Step 12 Frontend Slice 3: route-based conversation selection plus
-// message history. Composer / POST message / SSE streaming are a later
-// slice -- this page fetches the full ConversationDetail (conversation +
-// its active messages) and hands the messages to the client-side
-// MessageList for rendering and auto-scroll.
+// Step 12 Frontend Slice 4: route-based conversation selection, message
+// history, and now live send/stream. This page fetches the full
+// ConversationDetail (conversation + its active messages) and hands the
+// messages to ChatThread as `canonicalMessages` -- re-supplied fresh on
+// every route change AND every router.refresh() ChatThread triggers
+// during reconciliation, never just used once on mount.
 //
 // GET /conversations/{id} treats an archived conversation the same as a
 // nonexistent one (backend/app/conversations_queries.py's
@@ -34,10 +35,10 @@ export default async function AssistantConversationPage({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col p-4">
-      <h1 className="text-sm font-medium">{detail.conversation.title ?? "新對話"}</h1>
-      <div className="mt-2 min-h-0 flex-1">
-        <MessageList conversationId={id} messages={detail.messages} />
+    <div className="flex h-full min-h-0 flex-col">
+      <h1 className="p-4 pb-0 text-sm font-medium">{detail.conversation.title ?? "新對話"}</h1>
+      <div className="min-h-0 flex-1">
+        <ChatThread key={id} conversationId={id} canonicalMessages={detail.messages} />
       </div>
     </div>
   );

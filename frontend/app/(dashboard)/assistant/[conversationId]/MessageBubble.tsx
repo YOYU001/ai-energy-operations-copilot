@@ -1,17 +1,19 @@
-import type { ChatMessageSummary } from "@/lib/api/types";
+import type { MessageViewModel } from "./messageViewModel";
 
-// Step 12 Frontend Slice 3: role_shape_check in database/schema.sql
+// Step 12 Frontend Slice 3/4: role_shape_check in database/schema.sql
 // guarantees role="user" rows are always status="completed" -- only
 // assistant rows can be streaming/failed/aborted. This component doesn't
 // special-case that on role though; it renders purely off `status` so it
-// keeps working if that guarantee ever changes.
+// keeps working if that guarantee ever changes. Slice 4: takes a
+// MessageViewModel (string id) instead of ChatMessageSummary directly, so
+// it renders canonical and pending/local bubbles identically.
 const STATUS_LABELS: Record<string, string> = {
   streaming: "回覆中…",
   failed: "回覆失敗",
   aborted: "已中止回覆",
 };
 
-export default function MessageBubble({ message }: { message: ChatMessageSummary }) {
+export default function MessageBubble({ message }: { message: MessageViewModel }) {
   const isUser = message.role === "user";
   const isFailed = message.status === "failed";
   const statusLabel = STATUS_LABELS[message.status];
@@ -35,9 +37,9 @@ export default function MessageBubble({ message }: { message: ChatMessageSummary
           </p>
         )}
         <p className="whitespace-pre-wrap break-words">{message.content}</p>
-        {isFailed && message.error_message && (
+        {isFailed && message.errorMessage && (
           <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-            {message.error_message}
+            {message.errorMessage}
           </p>
         )}
       </div>
