@@ -83,6 +83,18 @@ def test_get_conversation_with_active_messages_returns_none_when_absent():
     assert get_conversation_with_active_messages(conn, 999) is None
 
 
+def test_get_conversation_with_active_messages_returns_none_when_archived():
+    """Archived conversations are treated as not-found by this function --
+    every caller (GET /conversations/{id}, GET .../messages, POST
+    .../messages, POST .../regenerate) inherits this without needing its
+    own archived_at check."""
+    conn = FakeConversationsConnection()
+    conversation_id = create_conversation(conn)
+    archive_conversation(conn, conversation_id)
+
+    assert get_conversation_with_active_messages(conn, conversation_id) is None
+
+
 def test_get_conversation_with_active_messages_only_returns_active_rows():
     conn = FakeConversationsConnection()
     conversation_id = create_conversation(conn)

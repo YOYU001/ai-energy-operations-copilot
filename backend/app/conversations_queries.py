@@ -93,10 +93,17 @@ def list_conversations(conn, limit: int, offset: int) -> tuple[int, list[dict]]:
 
 def get_conversation_with_active_messages(conn, conversation_id: int) -> Optional[dict]:
     """Return {"conversation": dict, "messages": list[dict]} for this
-    conversation, or None if it doesn't exist. messages only includes rows
-    where is_active=true, ordered chronologically."""
+    conversation, or None if it doesn't exist OR has been archived --
+    every caller of this function (GET /conversations/{id}, GET
+    /conversations/{id}/messages, POST .../messages, POST .../regenerate)
+    already treats an archived conversation as inaccessible via the
+    general Assistant API, so this is enforced once here rather than
+    duplicated per-caller. Archiving remains a soft-delete: the row is
+    untouched, only ordinary reads/writes through this function stop
+    seeing it. messages only includes rows where is_active=true, ordered
+    chronologically."""
     conversation = conn.execute(
-        text("SELECT * FROM conversations WHERE id = :id"),
+        text("SELECT * FROM conversations WHERE id = :id AND archived_at IS NULL"),
         {"id": conversation_id},
     ).mappings().first()
     if conversation is None:

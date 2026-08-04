@@ -196,6 +196,22 @@ def test_get_conversation_detail_404_when_absent():
     assert response.status_code == 404
 
 
+def test_get_conversation_detail_404_when_archived():
+    """Archived conversations are treated as inaccessible via the general
+    Assistant API -- direct-URL access to an archived conversation's
+    detail must 404, not silently succeed."""
+    conn = FakeConversationsConnection()
+    _use_fake_connection(conn)
+    try:
+        client.post("/conversations", json={})
+        client.delete("/conversations/1")
+        response = client.get("/conversations/1")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # PATCH /conversations/{id}
 # ---------------------------------------------------------------------------
@@ -271,8 +287,12 @@ def test_delete_conversation_archives():
 
     assert response.status_code == 200
     assert response.json() == {"archived": True}
-    # archiving does not delete the row -- it remains individually fetchable
-    assert get_after.status_code == 200
+    # Archiving is a soft-delete: the row itself is never removed (the fake's
+    # own conversations_by_id dict still has it), but per the general
+    # Assistant API contract an archived conversation is treated as
+    # inaccessible -- GET /conversations/{id} returns 404, not the row.
+    assert get_after.status_code == 404
+    assert 1 in conn.conversations_by_id
 
 
 def test_delete_conversation_404_when_absent():
@@ -322,6 +342,22 @@ def test_get_conversation_messages_404_when_conversation_absent():
     _use_fake_connection(conn)
     try:
         response = client.get("/conversations/999/messages")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 404
+
+
+def test_get_conversation_messages_404_when_conversation_archived():
+    """Same contract as the conversation-detail 404 above: an archived
+    conversation's message history must not be readable via the general
+    Assistant API either."""
+    conn = FakeConversationsConnection()
+    _use_fake_connection(conn)
+    try:
+        client.post("/conversations", json={})
+        client.delete("/conversations/1")
+        response = client.get("/conversations/1/messages")
     finally:
         _clear_override()
 

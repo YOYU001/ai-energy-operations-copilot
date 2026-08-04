@@ -469,6 +469,8 @@ class FakeConversationsConnection:
 
         if "SELECT * FROM conversations WHERE id" in sql:
             row = self.conversations_by_id.get(params.get("id"))
+            if row is not None and "archived_at IS NULL" in sql and row["archived_at"] is not None:
+                row = None
             return FakeExecResult(rows=[dict(row)] if row else [])
 
         if "SELECT * FROM chat_messages" in sql and "ORDER BY created_at, id" in sql:
