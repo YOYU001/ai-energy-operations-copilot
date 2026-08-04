@@ -15,10 +15,14 @@ export default function MessageList({
   conversationId,
   messages,
   trailingPanel,
+  onRegenerate,
+  regenerateDisabled,
 }: {
   conversationId: number;
   messages: MessageViewModel[];
   trailingPanel?: ReactNode;
+  onRegenerate?: (parentUserMessageId: number) => void;
+  regenerateDisabled?: boolean;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -47,7 +51,12 @@ export default function MessageList({
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-4">
       {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
+        <MessageBubble
+          key={message.id}
+          message={message}
+          onRegenerate={onRegenerate}
+          regenerateDisabled={regenerateDisabled}
+        />
       ))}
       {trailingPanel}
       <div ref={bottomRef} />

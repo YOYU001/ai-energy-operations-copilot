@@ -1,13 +1,16 @@
 import { useCallback, useRef } from "react";
 import type { Dispatch } from "react";
 import { parseAssistantSSEStream } from "@/lib/assistant/sse";
-import type { Action } from "./ChatThread";
+import type { Action, PreStreamError } from "./ChatThread";
 
-// Step 12 Frontend Slice 4: orchestrates one send -- POST, then read the
-// SSE stream via the EXISTING parser in lib/assistant/sse.ts (not
-// reimplemented here). This module only adds a defensive event-order
+// Step 12 Frontend Slice 4/5: orchestrates one send/regenerate -- POST,
+// then read the SSE stream via the EXISTING parser in lib/assistant/sse.ts
+// (not reimplemented here). This module only adds a defensive event-order
 // guard and dispatches reducer actions; ChatThread owns all resulting
-// state.
+// state. send() and regenerate() differ only in how the initial POST is
+// made -- both hand the resulting Response to the same
+// consumeAssistantStream() for the six-event SSE loop, so there is
+// exactly one place that logic lives.
 
 async function parseErrorDetail(res: Response): Promise<string> {
   try {
@@ -22,72 +25,21 @@ function isAbortError(cause: unknown): boolean {
   return cause instanceof DOMException && cause.name === "AbortError";
 }
 
-async function runSend(
-  conversationId: number,
-  content: string,
-  signal: AbortSignal,
+// Step 12 Frontend Slice 5: shared six-event SSE consumption loop for
+// both a fresh send and a regenerate -- identical defensive rules either
+// way (duplicate/out-of-order message_started, token/tool_call/tool_result
+// before message_started, events after a terminal event, stream ending
+// without a terminal event).
+async function consumeAssistantStream(
+  body: ReadableStream<Uint8Array>,
   dispatch: Dispatch<Action>,
   isCurrent: () => boolean,
 ): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(`/api/assistant/conversations/${conversationId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
-      signal,
-    });
-  } catch (cause) {
-    if (!isCurrent()) return;
-    if (isAbortError(cause)) {
-      dispatch({ type: "ABORTED" });
-      return;
-    }
-    dispatch({
-      type: "FAILED_BEFORE_STREAM",
-      preStreamError: {
-        kind: "reconcile-required",
-        message: `無法連線到伺服器（${(cause as Error).message}）。`,
-      },
-    });
-    return;
-  }
-
-  if (!isCurrent()) return;
-
-  if (!res.ok) {
-    const detail = await parseErrorDetail(res);
-    // Per backend/app/main.py's post_message: insert_user_message runs
-    // before conn.commit(), and only content-blank (400) and
-    // conversation-not-found/archived (404) are guaranteed to be raised
-    // BEFORE that insert. Any other status means we can't rule out the
-    // user message having already been committed server-side.
-    if (res.status === 400) {
-      dispatch({ type: "FAILED_BEFORE_STREAM", preStreamError: { kind: "validation", message: detail } });
-    } else if (res.status === 404) {
-      dispatch({
-        type: "FAILED_BEFORE_STREAM",
-        preStreamError: { kind: "conversation-unavailable", message: detail },
-      });
-    } else {
-      dispatch({ type: "FAILED_BEFORE_STREAM", preStreamError: { kind: "reconcile-required", message: detail } });
-    }
-    return;
-  }
-
-  if (res.body === null) {
-    dispatch({
-      type: "FAILED_BEFORE_STREAM",
-      preStreamError: { kind: "reconcile-required", message: "伺服器沒有回傳串流內容。" },
-    });
-    return;
-  }
-
   let gotMessageStarted = false;
   let gotTerminal = false;
 
   try {
-    for await (const evt of parseAssistantSSEStream(res.body)) {
+    for await (const evt of parseAssistantSSEStream(body)) {
       if (!isCurrent()) return;
       if (gotTerminal) {
         console.warn(`assistant SSE: ignoring "${evt.event}" received after a terminal event`);
@@ -116,11 +68,28 @@ async function runSend(
           dispatch({ type: "TOKEN_RECEIVED", delta: evt.data.delta });
           break;
         }
-        case "tool_call":
-        case "tool_result":
-          // No tool activity UI this Slice -- consumed so the stream
-          // keeps draining, deliberately no dispatch.
+        case "tool_call": {
+          if (!gotMessageStarted) {
+            console.warn("assistant SSE: ignoring tool_call received before message_started");
+            break;
+          }
+          dispatch({
+            type: "TOOL_ACTIVITY",
+            entry: { type: "call", toolName: evt.data.tool_name, detail: JSON.stringify(evt.data.arguments) },
+          });
           break;
+        }
+        case "tool_result": {
+          if (!gotMessageStarted) {
+            console.warn("assistant SSE: ignoring tool_result received before message_started");
+            break;
+          }
+          dispatch({
+            type: "TOOL_ACTIVITY",
+            entry: { type: "result", toolName: evt.data.tool_name, detail: evt.data.summary },
+          });
+          break;
+        }
         case "message_completed": {
           gotTerminal = true;
           if (!gotMessageStarted) {
@@ -190,6 +159,136 @@ async function runSend(
   }
 }
 
+async function handleNonOkResponse(
+  res: Response,
+  dispatch: Dispatch<Action>,
+  classify: (status: number, detail: string) => PreStreamError,
+): Promise<void> {
+  const detail = await parseErrorDetail(res);
+  dispatch({ type: "FAILED_BEFORE_STREAM", preStreamError: classify(res.status, detail) });
+}
+
+async function runSend(
+  conversationId: number,
+  content: string,
+  signal: AbortSignal,
+  dispatch: Dispatch<Action>,
+  isCurrent: () => boolean,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/assistant/conversations/${conversationId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+      signal,
+    });
+  } catch (cause) {
+    if (!isCurrent()) return;
+    if (isAbortError(cause)) {
+      dispatch({ type: "ABORTED" });
+      return;
+    }
+    dispatch({
+      type: "FAILED_BEFORE_STREAM",
+      preStreamError: {
+        kind: "reconcile-required",
+        message: `無法連線到伺服器（${(cause as Error).message}）。`,
+      },
+    });
+    return;
+  }
+
+  if (!isCurrent()) return;
+
+  if (!res.ok) {
+    // Per backend/app/main.py's post_message: insert_user_message runs
+    // before conn.commit(), and only content-blank (400) and
+    // conversation-not-found/archived (404) are guaranteed to be raised
+    // BEFORE that insert. Any other status means we can't rule out the
+    // user message having already been committed server-side.
+    await handleNonOkResponse(res, dispatch, (status, detail) => {
+      if (status === 400) return { kind: "validation", message: detail };
+      if (status === 404) return { kind: "conversation-unavailable", message: detail };
+      return { kind: "reconcile-required", message: detail };
+    });
+    return;
+  }
+
+  if (res.body === null) {
+    dispatch({
+      type: "FAILED_BEFORE_STREAM",
+      preStreamError: { kind: "reconcile-required", message: "伺服器沒有回傳串流內容。" },
+    });
+    return;
+  }
+
+  await consumeAssistantStream(res.body, dispatch, isCurrent);
+}
+
+async function runRegenerateSend(
+  conversationId: number,
+  parentUserMessageId: number,
+  signal: AbortSignal,
+  dispatch: Dispatch<Action>,
+  isCurrent: () => boolean,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(
+      `/api/assistant/conversations/${conversationId}/messages/${parentUserMessageId}/regenerate`,
+      { method: "POST", signal },
+    );
+  } catch (cause) {
+    if (!isCurrent()) return;
+    if (isAbortError(cause)) {
+      dispatch({ type: "ABORTED" });
+      return;
+    }
+    dispatch({
+      type: "FAILED_BEFORE_STREAM",
+      preStreamError: {
+        kind: "reconcile-required",
+        message: `無法連線到伺服器（${(cause as Error).message}）。`,
+      },
+    });
+    return;
+  }
+
+  if (!isCurrent()) return;
+
+  if (!res.ok) {
+    // Per backend/app/main.py's post_regenerate: create_regenerate_attempt
+    // runs before conn.commit(), and 400 (not a regenerable user message),
+    // 404 (conversation/message not found), and 409 (already in progress)
+    // are all raised BEFORE that insert -- none of them can have created a
+    // duplicate attempt.
+    await handleNonOkResponse(res, dispatch, (status, detail) => {
+      if (status === 400) return { kind: "validation", message: detail };
+      if (status === 404) return { kind: "conversation-unavailable", message: detail };
+      if (status === 409) return { kind: "already-in-progress", message: detail };
+      return { kind: "reconcile-required", message: detail };
+    });
+    return;
+  }
+
+  if (res.body === null) {
+    dispatch({
+      type: "FAILED_BEFORE_STREAM",
+      preStreamError: { kind: "reconcile-required", message: "伺服器沒有回傳串流內容。" },
+    });
+    return;
+  }
+
+  await consumeAssistantStream(res.body, dispatch, isCurrent);
+}
+
+function makeClientId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random()}`;
+}
+
 export function useSendMessage(conversationId: number, dispatch: Dispatch<Action>) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const runIdRef = useRef(0);
@@ -201,16 +300,34 @@ export function useSendMessage(conversationId: number, dispatch: Dispatch<Action
 
       runIdRef.current += 1;
       const myRunId = runIdRef.current;
-      const clientId =
-        typeof crypto !== "undefined" && "randomUUID" in crypto
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random()}`;
+      const clientId = makeClientId();
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
       dispatch({ type: "SEND_REQUESTED", clientId, content: trimmed });
 
       void runSend(conversationId, trimmed, controller.signal, dispatch, () => runIdRef.current === myRunId);
+    },
+    [conversationId, dispatch],
+  );
+
+  const regenerate = useCallback(
+    (parentUserMessageId: number) => {
+      runIdRef.current += 1;
+      const myRunId = runIdRef.current;
+      const clientId = makeClientId();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      dispatch({ type: "REGENERATE_REQUESTED", clientId, parentUserMessageId });
+
+      void runRegenerateSend(
+        conversationId,
+        parentUserMessageId,
+        controller.signal,
+        dispatch,
+        () => runIdRef.current === myRunId,
+      );
     },
     [conversationId, dispatch],
   );
@@ -228,5 +345,5 @@ export function useSendMessage(conversationId: number, dispatch: Dispatch<Action
     abortControllerRef.current?.abort();
   }, []);
 
-  return { send, stop, cancelActive };
+  return { send, regenerate, stop, cancelActive };
 }

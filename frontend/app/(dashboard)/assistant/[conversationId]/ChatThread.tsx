@@ -6,7 +6,13 @@ import { useRouter } from "next/navigation";
 import type { ChatMessageSummary } from "@/lib/api/types";
 import Composer from "./Composer";
 import MessageList from "./MessageList";
-import { canonicalToViewModel, pendingTurnToViewModels } from "./messageViewModel";
+import {
+  canonicalToViewModel,
+  orderCanonicalMessages,
+  pendingTurnToViewModels,
+  type MessageViewModel,
+  type ToolActivityEntry,
+} from "./messageViewModel";
 import { useSendMessage } from "./useSendMessage";
 
 // Step 12 Frontend Slice 4: single client-side state owner for a
@@ -31,9 +37,15 @@ export type RequestPhase =
 export type PreStreamError =
   | { kind: "validation"; message: string }
   | { kind: "conversation-unavailable"; message: string }
+  | { kind: "already-in-progress"; message: string }
   | { kind: "reconcile-required"; message: string };
 
 export interface PendingTurn {
+  // Step 12 Frontend Slice 5: "send" is a brand-new user turn (Composer);
+  // "regenerate" re-asks an EXISTING user message identified by
+  // parentUserMessageId -- no new user bubble is ever synthesized for it.
+  kind: "send" | "regenerate";
+  parentUserMessageId: number | null;
   clientId: string;
   phase: RequestPhase;
   userContent: string;
@@ -42,16 +54,29 @@ export interface PendingTurn {
   assistantContent: string;
   errorMessage: string | null;
   preStreamError: PreStreamError | null;
+  toolActivity: ToolActivityEntry[];
 }
+
+// Step 12 Frontend Slice 5: keyed by the REAL assistant message id (known
+// only once message_started arrives). Populated at RECONCILED time --
+// see the reducer -- so a turn's tool activity survives canonical
+// takeover instead of vanishing the instant pendingTurn is cleared. Only
+// lives for this page session; a reload or conversation switch loses it
+// (backend never returns tool_calls in ChatMessageSummary -- see
+// messageViewModel.ts), which is an accepted, documented limitation.
+export type ActivityByMessageId = Record<number, ToolActivityEntry[]>;
 
 interface ChatThreadState {
   pendingTurn: PendingTurn | null;
+  activityByMessageId: ActivityByMessageId;
 }
 
 export type Action =
   | { type: "SEND_REQUESTED"; clientId: string; content: string }
+  | { type: "REGENERATE_REQUESTED"; clientId: string; parentUserMessageId: number }
   | { type: "MESSAGE_STARTED"; assistantMessageId: number; attemptNumber: number }
   | { type: "TOKEN_RECEIVED"; delta: string }
+  | { type: "TOOL_ACTIVITY"; entry: ToolActivityEntry }
   | { type: "STOP_REQUESTED" }
   | { type: "ABORTED" }
   | { type: "MESSAGE_COMPLETED"; assistantMessageId: number }
@@ -66,29 +91,47 @@ const TERMINAL_RECONCILE_PHASES = new Set<RequestPhase>([
   "aborted",
 ]);
 
+const BUSY_PHASES = new Set<RequestPhase>(["connecting", "streaming", "stopping"]);
+
 const MAX_RECONCILE_RETRIES = 3;
 const RECONCILE_RETRY_DELAY_MS = 2000;
+
+function freshPendingTurn(
+  kind: "send" | "regenerate",
+  clientId: string,
+  parentUserMessageId: number | null,
+  userContent: string,
+): PendingTurn {
+  return {
+    kind,
+    parentUserMessageId,
+    clientId,
+    phase: "connecting",
+    userContent,
+    assistantMessageId: null,
+    attemptNumber: null,
+    assistantContent: "",
+    errorMessage: null,
+    preStreamError: null,
+    toolActivity: [],
+  };
+}
 
 function reducer(state: ChatThreadState, action: Action): ChatThreadState {
   const pending = state.pendingTurn;
 
   switch (action.type) {
     case "SEND_REQUESTED":
+      return { ...state, pendingTurn: freshPendingTurn("send", action.clientId, null, action.content) };
+    case "REGENERATE_REQUESTED":
       return {
-        pendingTurn: {
-          clientId: action.clientId,
-          phase: "connecting",
-          userContent: action.content,
-          assistantMessageId: null,
-          attemptNumber: null,
-          assistantContent: "",
-          errorMessage: null,
-          preStreamError: null,
-        },
+        ...state,
+        pendingTurn: freshPendingTurn("regenerate", action.clientId, action.parentUserMessageId, ""),
       };
     case "MESSAGE_STARTED":
       if (pending === null || pending.phase !== "connecting") return state;
       return {
+        ...state,
         pendingTurn: {
           ...pending,
           phase: "streaming",
@@ -100,18 +143,30 @@ function reducer(state: ChatThreadState, action: Action): ChatThreadState {
       if (pending === null || (pending.phase !== "streaming" && pending.phase !== "stopping")) {
         return state;
       }
-      return { pendingTurn: { ...pending, assistantContent: pending.assistantContent + action.delta } };
+      return {
+        ...state,
+        pendingTurn: { ...pending, assistantContent: pending.assistantContent + action.delta },
+      };
+    case "TOOL_ACTIVITY":
+      if (pending === null || (pending.phase !== "streaming" && pending.phase !== "stopping")) {
+        return state;
+      }
+      return {
+        ...state,
+        pendingTurn: { ...pending, toolActivity: [...pending.toolActivity, action.entry] },
+      };
     case "STOP_REQUESTED":
       if (pending === null || (pending.phase !== "connecting" && pending.phase !== "streaming")) {
         return state;
       }
-      return { pendingTurn: { ...pending, phase: "stopping" } };
+      return { ...state, pendingTurn: { ...pending, phase: "stopping" } };
     case "ABORTED":
       if (pending === null) return state;
-      return { pendingTurn: { ...pending, phase: "aborted" } };
+      return { ...state, pendingTurn: { ...pending, phase: "aborted" } };
     case "MESSAGE_COMPLETED":
       if (pending === null) return state;
       return {
+        ...state,
         pendingTurn: {
           ...pending,
           phase: "completed",
@@ -121,6 +176,7 @@ function reducer(state: ChatThreadState, action: Action): ChatThreadState {
     case "STREAM_FAILED_DURING":
       if (pending === null) return state;
       return {
+        ...state,
         pendingTurn: {
           ...pending,
           phase: "failed-during-stream",
@@ -130,10 +186,28 @@ function reducer(state: ChatThreadState, action: Action): ChatThreadState {
       };
     case "FAILED_BEFORE_STREAM":
       if (pending === null) return state;
-      return { pendingTurn: { ...pending, phase: "failed-before-stream", preStreamError: action.preStreamError } };
-    case "RECONCILED":
+      return {
+        ...state,
+        pendingTurn: { ...pending, phase: "failed-before-stream", preStreamError: action.preStreamError },
+      };
+    case "RECONCILED": {
+      if (pending === null) return state;
+      // Archive this turn's tool activity under its real assistant id
+      // BEFORE dropping pendingTurn, so it survives canonical takeover
+      // (messageViewModel's canonicalToViewModel looks it up by id).
+      if (pending.assistantMessageId !== null && pending.toolActivity.length > 0) {
+        return {
+          pendingTurn: null,
+          activityByMessageId: {
+            ...state.activityByMessageId,
+            [pending.assistantMessageId]: pending.toolActivity,
+          },
+        };
+      }
+      return { ...state, pendingTurn: null };
+    }
     case "DISMISS_UNCERTAIN":
-      return { pendingTurn: null };
+      return { ...state, pendingTurn: null };
     default:
       return state;
   }
@@ -147,8 +221,8 @@ export default function ChatThread({
   canonicalMessages: ChatMessageSummary[];
 }) {
   const router = useRouter();
-  const [state, dispatch] = useReducer(reducer, { pendingTurn: null });
-  const { send, stop, cancelActive } = useSendMessage(conversationId, dispatch);
+  const [state, dispatch] = useReducer(reducer, { pendingTurn: null, activityByMessageId: {} });
+  const { send, regenerate, stop, cancelActive } = useSendMessage(conversationId, dispatch);
 
   const reconcileAttemptsRef = useRef(0);
   const reconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -236,6 +310,12 @@ export default function ChatThread({
     send(content);
   }
 
+  function handleRegenerate(parentUserMessageId: number) {
+    clearReconcileTimer();
+    reconcileAttemptsRef.current = 0;
+    regenerate(parentUserMessageId);
+  }
+
   function handleManualRefresh() {
     router.refresh();
   }
@@ -245,10 +325,8 @@ export default function ChatThread({
     dispatch({ type: "DISMISS_UNCERTAIN" });
   }
 
-  const viewModels = [
-    ...canonicalMessages.map(canonicalToViewModel),
-    ...(state.pendingTurn ? pendingTurnToViewModels(state.pendingTurn) : []),
-  ];
+  const isBusy = state.pendingTurn !== null && BUSY_PHASES.has(state.pendingTurn.phase);
+  const viewModels = buildViewModels(canonicalMessages, state.pendingTurn, state.activityByMessageId);
 
   const trailingPanel = state.pendingTurn ? (
     <TrailingPanel
@@ -265,15 +343,56 @@ export default function ChatThread({
           conversationId={conversationId}
           messages={viewModels}
           trailingPanel={trailingPanel}
+          onRegenerate={handleRegenerate}
+          regenerateDisabled={isBusy}
         />
       </div>
-      <Composer
-        phase={state.pendingTurn?.phase ?? "idle"}
-        onSend={handleSend}
-        onStop={stop}
-      />
+      <Composer phase={state.pendingTurn?.phase ?? "idle"} onSend={handleSend} onStop={stop} />
     </div>
   );
+}
+
+// Step 12 Frontend Slice 5: assembles the final render order. Canonical
+// messages are grouped by parent (orderCanonicalMessages), then, if a
+// regenerate is in flight, the OLD canonical reply for that parent is
+// suppressed and the pending regenerate bubble is spliced in right after
+// that parent user message instead -- including the defensive case where
+// that parent has no canonical reply at all yet (append after the parent
+// regardless, per review point 3). A "send" pending turn is unaffected by
+// any of this and is simply appended at the end, exactly Slice 4's
+// behavior.
+function buildViewModels(
+  canonicalMessages: ChatMessageSummary[],
+  pending: PendingTurn | null,
+  activityByMessageId: ActivityByMessageId,
+): MessageViewModel[] {
+  const ordered = orderCanonicalMessages(canonicalMessages);
+  const regenerateTargetId = pending?.kind === "regenerate" ? pending.parentUserMessageId : null;
+
+  const result: MessageViewModel[] = [];
+  let regenerateInserted = false;
+
+  for (const m of ordered) {
+    if (m.role === "assistant" && regenerateTargetId !== null && m.parent_user_message_id === regenerateTargetId) {
+      continue; // suppressed: superseded by the pending regenerate bubble inserted below
+    }
+    result.push(canonicalToViewModel(m, activityByMessageId[m.id]));
+    if (m.role === "user" && m.id === regenerateTargetId && !regenerateInserted) {
+      result.push(...pendingTurnToViewModels(pending!));
+      regenerateInserted = true;
+    }
+  }
+
+  if (pending?.kind === "send") {
+    result.push(...pendingTurnToViewModels(pending));
+  } else if (pending?.kind === "regenerate" && !regenerateInserted) {
+    console.warn(
+      `regenerate pending turn's parent user message ${pending.parentUserMessageId} was not found in canonical history; appending at end`,
+    );
+    result.push(...pendingTurnToViewModels(pending));
+  }
+
+  return result;
 }
 
 function TrailingPanel({
@@ -303,6 +422,21 @@ function TrailingPanel({
           <Link href="/assistant" className="mt-1 inline-block underline">
             返回 AI Assistant
           </Link>
+        </div>
+      );
+    }
+
+    if (kind === "already-in-progress") {
+      return (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-foreground/70">
+          <p>{message}已有其他回覆正在生成中，請稍後重新整理查看結果。</p>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="mt-2 rounded-md border border-black/10 px-2 py-1 text-xs hover:bg-foreground/5 dark:border-white/10"
+          >
+            重新整理
+          </button>
         </div>
       );
     }
