@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import IconButton from "@/components/ui/IconButton";
+import { MobileDrawerProvider, useMobileDrawer } from "./MobileDrawerContext";
 
-export default function AppShell({
+function AppShellInner({
   sidebar,
   topNav,
   children,
@@ -12,16 +13,17 @@ export default function AppShell({
   topNav: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const { openDrawer, setOpenDrawer } = useMobileDrawer();
+  const open = openDrawer === "global-nav";
 
   useEffect(() => {
     if (!open) return;
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") setOpenDrawer(null);
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [open, setOpenDrawer]);
 
   return (
     <div className="flex h-full">
@@ -34,7 +36,7 @@ export default function AppShell({
       {open && (
         <div
           aria-hidden="true"
-          onClick={() => setOpen(false)}
+          onClick={() => setOpenDrawer(null)}
           className="fixed inset-0 z-40 bg-black/40 md:hidden"
         />
       )}
@@ -53,7 +55,7 @@ export default function AppShell({
           <IconButton
             aria-label={open ? "關閉導覽選單" : "開啟導覽選單"}
             aria-expanded={open}
-            onClick={() => setOpen((value) => !value)}
+            onClick={() => setOpenDrawer(open ? null : "global-nav")}
             className="m-2 md:hidden"
           >
             <span aria-hidden="true">☰</span>
@@ -63,5 +65,24 @@ export default function AppShell({
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>
+  );
+}
+
+export default function AppShell(props: {
+  sidebar: React.ReactNode;
+  topNav: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  // Step 12 Frontend Slice 2: the provider lives here so any descendant
+  // under `children` (e.g. the assistant page's own conversation-list
+  // drawer) can share the same single openDrawer value via
+  // useMobileDrawer() -- this is the only change from the previous local
+  // useState; every existing dashboard page's drawer behavior is
+  // unchanged (openDrawer is still only ever "global-nav" or null for
+  // them).
+  return (
+    <MobileDrawerProvider>
+      <AppShellInner {...props} />
+    </MobileDrawerProvider>
   );
 }
