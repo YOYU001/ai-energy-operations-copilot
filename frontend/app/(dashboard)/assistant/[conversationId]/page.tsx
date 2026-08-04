@@ -1,12 +1,14 @@
 import { notFound } from "next/navigation";
 import { ApiError, getConversation } from "@/lib/api/client";
+import MessageList from "./MessageList";
 
 export const dynamic = "force-dynamic";
 
-// Step 12 Frontend Slice 2: route-based conversation selection. Message
-// history / Composer / SSE streaming are a later slice -- this page only
-// proves the conversation actually exists and is accessible (404 via
-// notFound() otherwise) and shows a placeholder.
+// Step 12 Frontend Slice 3: route-based conversation selection plus
+// message history. Composer / POST message / SSE streaming are a later
+// slice -- this page fetches the full ConversationDetail (conversation +
+// its active messages) and hands the messages to the client-side
+// MessageList for rendering and auto-scroll.
 //
 // GET /conversations/{id} treats an archived conversation the same as a
 // nonexistent one (backend/app/conversations_queries.py's
@@ -32,11 +34,11 @@ export default async function AssistantConversationPage({
   }
 
   return (
-    <div className="flex h-full flex-col p-4">
+    <div className="flex h-full min-h-0 flex-col p-4">
       <h1 className="text-sm font-medium">{detail.conversation.title ?? "新對話"}</h1>
-      <p className="mt-2 text-sm text-foreground/60">
-        訊息記錄與對話功能將於下一個 Slice 加入。
-      </p>
+      <div className="mt-2 min-h-0 flex-1">
+        <MessageList conversationId={id} messages={detail.messages} />
+      </div>
     </div>
   );
 }
