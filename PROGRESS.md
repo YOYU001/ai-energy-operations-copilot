@@ -4,7 +4,7 @@
 打造 **AI Energy Operations Copilot MVP v1**，作為 NVIDIA 面試作品集與 AI 工程能力展示專案。
 
 ## Current Phase
-Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → Step 10：Knowledge Base / RAG（正式版）8 個 sub-step 全數完成並正式結案 → Step 11：Case Similarity — backend、frontend 均已完成並驗收通過 → **Step 12：AI Assistant / Chat UI — backend（Sub-step 1–3C）與 frontend（Slice 1–5）均已完成並驗收通過**。`/assistant` 現已具備完整聊天流程：conversation 管理（建立／選取／封存／reload 恢復）、message history（parent-based ordering、四種狀態顯示）、Composer 送出與 SSE token streaming、Stop generating、tool activity 面板、regenerate lifecycle，全專案 503 個測試通過，frontend lint／`tsc --noEmit`／build 全數通過，desktop 手動驗證無 blocker。下一步：**Step 12 收尾（建立 PR、review／merge）**。
+Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → Step 10：Knowledge Base / RAG（正式版）8 個 sub-step 全數完成並正式結案 → Step 11：Case Similarity — backend、frontend 均已完成並驗收通過 → Step 12：AI Assistant / Chat UI — backend（Sub-step 1–3C）與 frontend（Slice 1–5）均已完成並驗收通過，PR #46 已用 merge commit（7a11cb6）合併進 main，feature branch 已清理 → **Step 12 收尾後的 scope-gap 盤點**（2026-08-05）發現 Step 9 原始規劃的 battery scheduling suggestion／cost estimation／green operations index 三項從未實作、也未被記錄，roadmap 因此新增 Step 13（補完這三項）並將原 Analysis Report 順延為 Step 14；MVP v1 正式完成條件為 Step 13 + Step 14 皆完成。詳見 docs/PROJECT_ALIGNMENT_REVIEW.md §9 2026-08-05 更新。下一步：**Step 13：Rule-Based Scheduling / Cost / Green Operations 補完**。
 
 ## Completed
 - 定義 MVP v1 產品範圍、技術棧、Internal Knowledge Only 原則、初版 data schema，以及 Claude Code learning-by-building / 漸進式開發流程。
@@ -49,6 +49,8 @@ Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Documen
 - Step 12 Frontend Slice 1–5 — `/assistant` Chat UI 正式結案，全數驗收通過：server-only API proxy（`lib/api/client.ts` + `app/api/assistant/*`，SSE 直接 passthrough 不重組）與唯一 SSE parser（`lib/assistant/sse.ts`）；route-based conversation 導覽（建立／選取／URL 同步／reload 恢復／封存／not-found）；conversation list 的 loading／empty／error UX；message history 依 `parent_user_message_id` 分組排序，四種狀態（completed/streaming/failed/aborted）正確顯示。Details: docs/step12_frontend_chat_ui_plan.md。
 - Step 12 Frontend Slice 4–5 — Composer + optimistic UI + token streaming + Stop generating：`ChatThread.tsx` 為唯一 client state owner（8 種 request phase、bounded reconciliation 最多重試 3 次）；tool activity 面板（`<details>` 預設收合，僅本頁 session 保留）；regenerate lifecycle 用 `parent_user_message_id`、409 不重送、新 attempt 永久維持在原 user message 下方。Details: docs/step12_slice4_plan.md。
 - Step 12 Frontend 整體收尾驗收：desktop 全流程手動驗證，全專案 503 個測試通過，lint／`tsc --noEmit`／build 全數通過，無 blocker；mobile 視覺驗證待補（見 Current Known Issues）。Details: docs/step12_frontend_chat_ui_plan.md。
+- Step 12 正式結案：4 則 review comments（tool result JSON 編碼、regenerate context 排除 superseded 回覆、archived conversation PATCH 拒絕、sidebar 同步）修正並各自補測試，PR #46 以 merge commit 7a11cb6 合併進 main，local／remote feature branch 已安全刪除。
+- Step 12 收尾後的 Roadmap Scope-Gap 盤點（2026-08-05）：發現 Step 9 原始規劃的 battery scheduling suggestion／cost estimation／green operations index 三項從未實作、也未被記錄為已知限制。roadmap 調整為新增 Step 13（補完這三項 + Dashboard 補 Cost comparison／Green Operations Index 圖表）、原 Analysis Report 順延為 Step 14、新增選配 Step 15（AI Assistant tool 擴充，非 MVP v1 必要條件）。MVP v1 正式完成條件為 Step 13 + Step 14 皆完成。Details: docs/PROJECT_ALIGNMENT_REVIEW.md §9、docs/DEVELOPMENT_WORKFLOW.md 第 6 節。
 
 ## Important Decisions
 - Frontend：Next.js
@@ -124,7 +126,7 @@ MVP v1 應涵蓋：
 - Step 12 frontend role mode selector 尚未實作，Composer 目前沒有角色化回答模式的切換入口（對應 MVP v1 Scope 第 9 項的 UI 部分尚缺，backend `role_mode` 欄位已存在可用）。
 
 ## Next Step
-**Step 12 收尾**：backend（Sub-step 1–3C）與 frontend（Slice 1–5）均已完成並驗收通過，下一步是建立 PR 並進行 review／merge。Role mode selector 與 citation panel 列為後續 enhancement（見 Current Known Issues），不是 Step 12 完成認定的 blocker。
+**Step 13：Rule-Based Scheduling / Cost / Green Operations 補完**——實作 `docs/MVP1_RULES.md` §5（battery scheduling suggestion）、§6（cost estimation）、§7（green operations index）三組規則，對應 backend API 與測試，並補上 Dashboard 的 Cost comparison、Green Operations Index 兩張圖表。`database/schema.sql` 的 `analysis_runs` 已是通用設計，不需要新增 migration。完成後接續 Step 14：Analysis Report。Step 15（AI Assistant tool 擴充）列為選配，不是 MVP v1 完成的必要條件。
 
 ## Files To Read Next Time
 每次一定要先讀：

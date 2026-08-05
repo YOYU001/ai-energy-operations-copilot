@@ -246,7 +246,7 @@ Green Operations Index
 Anomaly timeline
 ```
 
-MVP 第一階段聚焦 `BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT` 場景相關圖表，其餘固定圖表類型後續擴充。
+MVP 第一階段聚焦 `BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT` 場景相關圖表，其餘固定圖表類型後續擴充。`Cost comparison`、`Green Operations Index` 兩張圖依賴 Step 13 的資料，補在 Step 13。`Anomaly timeline` 列為後續擴充，不在 Step 13/14 範圍內。
 
 ### Step 9: Rule-Based Analysis
 
@@ -260,6 +260,8 @@ green operations index
 ```
 
 MVP 第一階段先只實作 `BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT` 這一條規則（見 `docs/MVP1_RULES.md` 4.6 節），其餘 7 種異常類型後續擴充。
+
+Step 9 實際交付範圍僅 anomaly diagnosis 一項；`battery scheduling suggestion`、`cost estimation`、`green operations index` 三項未在 Step 9 實作，已移至新 Step 13（見下方）。
 
 ### Step 10: Knowledge Base / RAG
 
@@ -303,7 +305,21 @@ Training Mode
 
 Structured data 查詢採受控 tool-calling，複用 Step 5 既有查詢函式（`backend/app/datasets_queries.py`），不做 unrestricted Text-to-SQL（見 `docs/DECISIONS.md` ADR-002）。回答格式依 `docs/MVP1_RULES.md` 第 8 節的七部分結構。
 
-### Step 13: Analysis Report
+### Step 13: Rule-Based Scheduling / Cost / Green Operations 補完
+
+實作 `docs/MVP1_RULES.md` §5、§6、§7 三組規則，補齊 Step 9 當初漏做的部分：
+
+```text
+battery scheduling suggestion（charge / discharge / idle recommendation）
+cost estimation（energy cost、arbitrage saving、over-contract risk）
+green operations index（100 分權重公式）
+```
+
+對應 backend API 與測試需一併完成；`database/schema.sql` 的 `analysis_runs`（`analysis_type TEXT` + `result_json JSONB`）已是通用設計，不需要新增 migration。Dashboard 需補上 Step 8 原定但當時未做的兩張圖：`Cost comparison`、`Green Operations Index`。
+
+MVP v1 正式完成條件之一：本 Step 完成，且三項功能各自有對應的 backend API 與測試。
+
+### Step 14（原 Step 13）: Analysis Report
 
 根據以下資料產生報告：
 
@@ -316,6 +332,14 @@ cost estimate
 green operations index
 limitations
 ```
+
+依賴 Step 13 完成——`schedule suggestions`、`cost estimate`、`green operations index` 三個區塊需要 Step 13 產出的真實資料，不可用假資料填補或讓必要區塊無故空白。
+
+MVP v1 正式完成條件之一：本 Step 完成，且 7 個必要區塊都有真實資料支撐。
+
+### Step 15（選配）: AI Assistant Tool Registry 擴充
+
+讓 Step 12 的 AI Assistant 聊天工具也能引用 Step 13 產出的排程建議／成本估算／綠能指數。列為選配，**不是 MVP v1 完成的必要條件**——Analysis Report 頁面能直接使用這些資料即可，聊天工具支援可留給後續版本。
 
 ---
 

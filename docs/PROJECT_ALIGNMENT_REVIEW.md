@@ -154,10 +154,17 @@ Step 10（原 Step 9）: Knowledge Base / RAG（正式版）
 Step 11（原 Step 10）: Case Similarity
 Step 12（原 Step 11）: Copilot Chat / AI Assistant 整合
     Tool-calling 架構，複用 Step 5 查詢能力，整合 Rule Engine + RAG + Case Similarity
-Step 13（原 Step 12）: Analysis Report
+Step 13（新增）: Rule-Based Scheduling / Cost / Green Operations 補完
+    Step 9 當初漏做的 battery scheduling suggestion、cost estimation、green operations index，MVP v1 正式完成的必要條件之一
+Step 14（原 Step 12）: Analysis Report
+    依賴 Step 13 的資料；MVP v1 正式完成的必要條件之一
+Step 15（選配，新增）: AI Assistant Tool Registry 擴充
+    讓聊天工具引用 Step 13 產出的資料；不是 MVP v1 完成的必要條件
 ```
 
 完整版本見 `docs/DEVELOPMENT_WORKFLOW.md` 第 6 節（已同步更新）。
+
+> 2026-08-05 更新：Step 12 結案後盤點發現 Step 9 原始規劃的 battery scheduling suggestion／cost estimation／green operations index 三項從未實作，且未被記錄為已知限制。新增 Step 13（補完這三項）與 Step 15（選配的 AI Assistant tool 擴充），原 Step 12（Analysis Report）順延為 Step 14。MVP v1 正式完成條件為 Step 13 + Step 14 皆完成；其餘 7 種 anomaly rules、role mode selector、citation panel、mobile 驗證、tool activity persistence 維持列為 Known Issues，不納入 Step 13/14 範圍。
 
 ---
 
