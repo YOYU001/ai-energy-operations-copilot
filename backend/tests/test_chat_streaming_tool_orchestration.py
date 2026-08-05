@@ -17,6 +17,7 @@ recorder stubs.
 
 import asyncio
 import json
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -84,11 +85,13 @@ class _ScriptedProvider:
         self._rounds = list(rounds)
         self.calls = 0
         self.tools_per_call: list = []
+        self.messages_per_call: list = []
 
     def stream_chat(self, messages, tools=None):
         events = self._rounds[self.calls]
         self.calls += 1
         self.tools_per_call.append(tools)
+        self.messages_per_call.append(messages)
 
         async def _gen():
             for event in events:
@@ -404,6 +407,116 @@ def test_capability_guard_rejects_diagnostic_answer_with_no_tool_calls_and_never
     assert _joined_token_deltas(frames) == main_module.INSUFFICIENT_DATA_ANSWER
     # no tool ever executed -> record_tool_activity is not called at all
     assert len(tool_activity_recorder.calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# 5. Tool results containing datetime/date values must be JSON-encoded
+#    (via jsonable_encoder) before being embedded in the tool message sent
+#    back to the provider -- a raw json.dumps on these shapes previously
+#    raised TypeError and aborted orchestration.
+# ---------------------------------------------------------------------------
+
+
+def test_get_dataset_summary_result_with_datetime_is_encoded_and_orchestration_continues(monkeypatch):
+    finalize_recorder, _ = _setup(monkeypatch)
+
+    def fake_execute_tool(conn, embedding_provider, name, args):
+        assert name == "get_dataset_summary"
+        return {
+            "dataset_id": 12,
+            "summary": {
+                "row_count": 100,
+                "site_count": 2,
+                "start_time": datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc),
+                "end_time": datetime(2026, 1, 2, 0, 0, tzinfo=timezone.utc),
+                "columns": {"battery_temperature": {"min": 10.0, "mean": 20.0, "max": 42.0}},
+            },
+        }
+
+    monkeypatch.setattr(main_module, "execute_tool", fake_execute_tool)
+
+    provider = _ScriptedProvider(
+        rounds=[
+            _tool_call_events("call_1", "get_dataset_summary", {"dataset_id": 12}),
+            _stop_round("DISCARDED ORCHESTRATION TEXT -- must never appear"),  # round 2: orchestration ends, discarded
+            _stop_round(_SEVEN_PART_ANSWER),  # Phase 2 synthesis
+        ]
+    )
+
+    frames = _collect_frames(
+        main_module.generate(
+            42, provider, [{"role": "user", "content": "why is battery 12 hot?"}], FakeRequest(),
+            is_diagnostic=True, build_embedding_provider=None,
+        )
+    )
+
+    joined = "".join(frames)
+    assert "event: message_completed" in joined
+    assert "event: error" not in joined
+
+    # orchestration reached Phase 2 synthesis instead of aborting on TypeError
+    assert provider.calls == 3
+    assert len(finalize_recorder.calls) == 1
+    assert finalize_recorder.calls[0]["content"] == _SEVEN_PART_ANSWER
+
+    # the tool message handed to the provider for round 2 must be JSON-decodable
+    second_call_messages = provider.messages_per_call[1]
+    tool_message = next(m for m in second_call_messages if m.get("role") == "tool")
+    decoded = json.loads(tool_message["content"])
+    assert decoded["summary"]["start_time"] == "2026-01-01T00:00:00+00:00"
+    assert decoded["summary"]["end_time"] == "2026-01-02T00:00:00+00:00"
+
+
+def test_get_dataset_timeseries_result_with_timestamp_is_encoded_and_orchestration_continues(monkeypatch):
+    finalize_recorder, _ = _setup(monkeypatch)
+
+    def fake_execute_tool(conn, embedding_provider, name, args):
+        assert name == "get_dataset_timeseries"
+        return {
+            "dataset_id": 12,
+            "total": 1,
+            "rows": [
+                {
+                    "id": 1,
+                    "dataset_id": 12,
+                    "timestamp": datetime(2026, 1, 1, 8, 30, tzinfo=timezone.utc),
+                    "reading_date": date(2026, 1, 1),
+                    "electricity_price": 3.5,
+                    "grid_import_kw": 12.0,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(main_module, "execute_tool", fake_execute_tool)
+
+    provider = _ScriptedProvider(
+        rounds=[
+            _tool_call_events("call_1", "get_dataset_timeseries", {"dataset_id": 12}),
+            _stop_round("DISCARDED ORCHESTRATION TEXT -- must never appear"),  # round 2: orchestration ends, discarded
+            _stop_round(_SEVEN_PART_ANSWER),  # Phase 2 synthesis
+        ]
+    )
+
+    frames = _collect_frames(
+        main_module.generate(
+            42, provider, [{"role": "user", "content": "show me dataset 12 timeseries"}], FakeRequest(),
+            is_diagnostic=True, build_embedding_provider=None,
+        )
+    )
+
+    joined = "".join(frames)
+    assert "event: message_completed" in joined
+    assert "event: error" not in joined
+
+    assert provider.calls == 3
+    assert len(finalize_recorder.calls) == 1
+    assert finalize_recorder.calls[0]["content"] == _SEVEN_PART_ANSWER
+
+    second_call_messages = provider.messages_per_call[1]
+    tool_message = next(m for m in second_call_messages if m.get("role") == "tool")
+    decoded = json.loads(tool_message["content"])
+    assert decoded["rows"][0]["timestamp"] == "2026-01-01T08:30:00+00:00"
+    assert decoded["rows"][0]["reading_date"] == "2026-01-01"
 
 
 def test_capability_guard_does_not_apply_to_conversational_messages(monkeypatch):

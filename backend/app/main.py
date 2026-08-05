@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
@@ -917,7 +918,11 @@ async def generate(
                         tool_call_log.append({"tool_name": name, "arguments": args, "summary": summary, "error": False})
                         yield _sse_frame("tool_result", {"tool_name": name, "summary": summary})
                         working_messages.append(
-                            {"role": "tool", "tool_call_id": tool_call_id, "content": json.dumps(result)}
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call_id,
+                                "content": json.dumps(jsonable_encoder(result)),
+                            }
                         )
                     except UnknownToolError:
                         summary = f"unknown tool: {name}"
