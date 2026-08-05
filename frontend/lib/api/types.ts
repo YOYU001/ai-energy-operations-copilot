@@ -210,3 +210,43 @@ export interface CaseSearchResult {
   matches: string[];
   differs: string[];
 }
+
+// Step 12: mirrors backend/app/schemas.py's RoleMode Literal and the
+// conversation/message response models field-for-field.
+export type RoleMode = "operator" | "engineer" | "executive" | "training";
+
+export interface ConversationSummary {
+  id: number;
+  title: string | null;
+  role_mode: RoleMode | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationsPage {
+  total: number;
+  limit: number;
+  offset: number;
+  items: ConversationSummary[];
+}
+
+export interface ChatMessageSummary {
+  id: number;
+  role: string;
+  content: string;
+  status: string;
+  parent_user_message_id: number | null;
+  attempt_number: number;
+  is_active: boolean;
+  provider: string | null;
+  model: string | null;
+  finish_reason: string | null;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface ConversationDetail {
+  conversation: ConversationSummary;
+  messages: ChatMessageSummary[];
+}

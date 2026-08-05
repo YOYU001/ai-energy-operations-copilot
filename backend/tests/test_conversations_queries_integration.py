@@ -31,15 +31,19 @@ cleaned up in fixture teardown regardless of outcome.
 
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import text
 
 from app.conversations_queries import (
+    RegenerateAlreadyInProgress,
     create_conversation,
     create_regenerate_attempt,
     create_streaming_assistant_placeholder,
+    finalize_assistant_message,
     insert_user_message,
+    mark_stale_streaming_attempts_for_conversation,
 )
 from app.db import get_connection
 
@@ -57,12 +61,23 @@ def setup_conn():
 def seeded_parent_message(setup_conn):
     """Create a conversation with a user message and its first assistant
     attempt, committed so the two concurrent test connections can both see
-    it. Cleans up afterwards regardless of test outcome."""
+    it. Cleans up afterwards regardless of test outcome.
+
+    The seeded first attempt is finalized to 'completed' before yielding
+    (Step 12 Sub-step 3C fixture fix): create_regenerate_attempt now
+    rejects regenerating over a still-'streaming' active attempt (the
+    in-flight guard, docs/step12_substep3c_plan.md section 6). This
+    fixture's actual purpose -- proving FOR UPDATE serializes two
+    concurrent regenerate calls against a *normal* parent -- was never
+    about regenerating while the original send is still streaming; no
+    real UI would offer a "regenerate" action during that window anyway,
+    so a completed precondition is the realistic case, not a workaround."""
     conversation_id = create_conversation(setup_conn, role_mode=None)
     user_message_id = insert_user_message(setup_conn, conversation_id, "integration test concurrency message")
-    create_streaming_assistant_placeholder(
+    first_attempt_id = create_streaming_assistant_placeholder(
         setup_conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini"
     )
+    finalize_assistant_message(setup_conn, first_attempt_id, "seeded answer", "completed", None, "stop", None)
     setup_conn.commit()
 
     try:
@@ -80,7 +95,21 @@ def seeded_parent_message(setup_conn):
             cleanup_conn.commit()
 
 
-def test_concurrent_regenerate_calls_serialize_and_produce_no_duplicate_attempt_numbers(seeded_parent_message):
+def test_concurrent_regenerate_calls_serialize_and_second_is_rejected_in_flight(seeded_parent_message):
+    """Step 12 Sub-step 3C revision: this test previously asserted BOTH
+    concurrent regenerate calls succeed (producing attempts 2 and 3). That
+    is no longer correct behavior -- create_regenerate_attempt now rejects
+    (RegenerateAlreadyInProgress) a regenerate call made while the current
+    active attempt is still 'streaming' (the in-flight guard,
+    docs/step12_substep3c_plan.md section 6), and the holder's regenerate
+    call always creates its new attempt with status='streaming' (never
+    'completed') -- so by the time the waiter's blocked FOR UPDATE
+    unblocks, it always sees a still-streaming attempt and must be
+    rejected. This test now proves exactly that: the lock still fully
+    serializes the two calls (same proof-of-blocking mechanism as before,
+    unchanged below), but only ONE of them ends up creating a new attempt;
+    the other gets RegenerateAlreadyInProgress, not a second successful
+    attempt."""
     conversation_id, user_message_id = seeded_parent_message
 
     lock_acquired = threading.Event()
@@ -163,8 +192,14 @@ def test_concurrent_regenerate_calls_serialize_and_produce_no_duplicate_attempt_
     holder_thread.join(timeout=15)
     waiter_thread.join(timeout=15)
 
-    assert not errors, f"concurrent regenerate calls raised: {errors}"
-    assert set(results.keys()) == {"holder", "waiter"}
+    # Exactly one of the two calls succeeds; the other is rejected as
+    # already-in-progress -- neither an unhandled error nor a second
+    # successful attempt.
+    assert set(results.keys()) | set(errors.keys()) == {"holder", "waiter"}
+    assert len(results) == 1, f"expected exactly one success, got results={results} errors={errors}"
+    succeeded_thread = next(iter(results))
+    rejected_thread = "holder" if succeeded_thread == "waiter" else "waiter"
+    assert isinstance(errors[rejected_thread], RegenerateAlreadyInProgress)
 
     with get_connection() as verify_conn:
         rows = verify_conn.execute(
@@ -175,22 +210,85 @@ def test_concurrent_regenerate_calls_serialize_and_produce_no_duplicate_attempt_
             {"id": user_message_id},
         ).mappings().all()
 
-    # Deterministic, not just "happens to be sorted": the holder's commit
-    # necessarily lands first (it held the lock the whole time), so its
-    # attempt must be 2 and the waiter's (unblocked only afterward) must be 3,
-    # on top of the seed fixture's attempt 1.
+    # Exactly 2 attempts exist: the seeded (completed) attempt 1, and the
+    # one new attempt the succeeding call created -- never a 3rd.
     attempt_numbers = [r["attempt_number"] for r in rows]
-    assert attempt_numbers == [1, 2, 3]
+    assert attempt_numbers == [1, 2]
 
-    # Not just "the numbers 1/2/3 exist somewhere" -- explicitly tie each
-    # thread's own returned id back to the attempt_number it must have
-    # produced, so this would fail if the ordering were ever coincidental
-    # rather than actually enforced by the lock.
     by_id = {r["id"]: r["attempt_number"] for r in rows}
-    assert by_id[results["holder"]] == 2
-    assert by_id[results["waiter"]] == 3
+    assert by_id[results[succeeded_thread]] == 2
 
     active_rows = [r for r in rows if r["is_active"]]
     assert len(active_rows) == 1, "exactly one attempt for this parent must remain active"
-    assert active_rows[0]["attempt_number"] == 3
-    assert active_rows[0]["id"] == results["waiter"]
+    assert active_rows[0]["attempt_number"] == 2
+    assert active_rows[0]["id"] == results[succeeded_thread]
+
+
+def test_stale_cleanup_never_overwrites_a_message_finalized_before_it_runs(seeded_parent_message):
+    """Step 12 Sub-step 3C: mark_stale_streaming_attempts_for_conversation's
+    WHERE status='streaming' guard must never clobber a message a
+    (real, concurrent-in-spirit) finalize already transitioned to a
+    terminal status -- proven here against the real DB, not just asserted
+    by code review."""
+    conversation_id, user_message_id = seeded_parent_message
+
+    with get_connection() as conn:
+        second_id = create_regenerate_attempt(conn, conversation_id, user_message_id, "openai", "gpt-4o-mini")
+        conn.commit()
+
+    # Simulate: this attempt started long enough ago to be "stale" by the
+    # read-time cleanup's cutoff, but a real finalize call reaches it
+    # first (matching how a normal request's Phase C would).
+    with get_connection() as backdate_conn:
+        backdate_conn.execute(
+            text("UPDATE chat_messages SET created_at = now() - interval '10 minutes' WHERE id = :id"),
+            {"id": second_id},
+        )
+        backdate_conn.commit()
+
+    with get_connection() as finalize_conn:
+        finalize_assistant_message(finalize_conn, second_id, "real answer", "completed", None, "stop", None)
+        finalize_conn.commit()
+
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=300)
+    with get_connection() as cleanup_conn:
+        affected = mark_stale_streaming_attempts_for_conversation(cleanup_conn, conversation_id, stale_before)
+        cleanup_conn.commit()
+
+    assert affected == 0, "cleanup must not match an already-finalized row"
+    with get_connection() as verify_conn:
+        row = verify_conn.execute(
+            text("SELECT status, content FROM chat_messages WHERE id = :id"),
+            {"id": second_id},
+        ).mappings().first()
+    assert row["status"] == "completed"
+    assert row["content"] == "real answer"
+
+
+def test_stale_cleanup_marks_a_genuinely_old_streaming_row_as_failed(seeded_parent_message):
+    conversation_id, user_message_id = seeded_parent_message
+
+    with get_connection() as conn:
+        second_id = create_regenerate_attempt(conn, conversation_id, user_message_id, "openai", "gpt-4o-mini")
+        conn.commit()
+
+    with get_connection() as backdate_conn:
+        backdate_conn.execute(
+            text("UPDATE chat_messages SET created_at = now() - interval '10 minutes' WHERE id = :id"),
+            {"id": second_id},
+        )
+        backdate_conn.commit()
+
+    stale_before = datetime.now(timezone.utc) - timedelta(seconds=300)
+    with get_connection() as cleanup_conn:
+        affected = mark_stale_streaming_attempts_for_conversation(cleanup_conn, conversation_id, stale_before)
+        cleanup_conn.commit()
+
+    assert affected == 1
+    with get_connection() as verify_conn:
+        row = verify_conn.execute(
+            text("SELECT status, error_message FROM chat_messages WHERE id = :id"),
+            {"id": second_id},
+        ).mappings().first()
+    assert row["status"] == "failed"
+    assert row["error_message"] == "stale_streaming"

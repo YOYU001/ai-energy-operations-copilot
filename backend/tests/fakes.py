@@ -1,3 +1,4 @@
+import json
 import math
 from datetime import datetime, timezone
 
@@ -468,6 +469,8 @@ class FakeConversationsConnection:
 
         if "SELECT * FROM conversations WHERE id" in sql:
             row = self.conversations_by_id.get(params.get("id"))
+            if row is not None and "archived_at IS NULL" in sql and row["archived_at"] is not None:
+                row = None
             return FakeExecResult(rows=[dict(row)] if row else [])
 
         if "SELECT * FROM chat_messages" in sql and "ORDER BY created_at, id" in sql:
@@ -480,7 +483,7 @@ class FakeConversationsConnection:
 
         if "UPDATE conversations" in sql and "SET title = COALESCE" in sql:
             row = self.conversations_by_id.get(params.get("id"))
-            if row is None:
+            if row is None or row["archived_at"] is not None:
                 return FakeExecResult(rows=[])
             if params.get("title") is not None:
                 row["title"] = params["title"]
@@ -592,9 +595,9 @@ class FakeConversationsConnection:
             ]
             return FakeExecResult(rows=[{"max_attempt": max(attempts) if attempts else 0}])
 
-        if "SELECT id FROM chat_messages" in sql and "is_active = true" in sql:
+        if "SELECT id, status FROM chat_messages" in sql and "is_active = true" in sql:
             active = self._active_messages_for_parent(params.get("parent_user_message_id"))
-            return FakeExecResult(rows=[{"id": active[0]["id"]}] if active else [])
+            return FakeExecResult(rows=[{"id": active[0]["id"], "status": active[0]["status"]}] if active else [])
 
         if "UPDATE chat_messages" in sql and "SET is_active = false" in sql:
             active = self._active_messages_for_parent(params.get("parent_user_message_id"))
@@ -602,6 +605,36 @@ class FakeConversationsConnection:
                 row["is_active"] = False
                 row["updated_at"] = datetime.now(timezone.utc)
             return FakeExecResult(rowcount=len(active))
+
+        if "UPDATE chat_messages" in sql and "SET tool_calls = CAST" in sql:
+            row = self.messages_by_id.get(params.get("message_id"))
+            if row is None:
+                return FakeExecResult(rowcount=0)
+            # real JSONB columns round-trip already-deserialized Python
+            # objects (SQLAlchemy/psycopg2), not the raw json.dumps() string
+            # the caller passed in as a bind parameter -- mirror that here.
+            tool_calls_param = params.get("tool_calls")
+            citations_param = params.get("citations")
+            row["tool_calls"] = json.loads(tool_calls_param) if tool_calls_param is not None else None
+            row["citations"] = json.loads(citations_param) if citations_param is not None else None
+            row["updated_at"] = datetime.now(timezone.utc)
+            return FakeExecResult(rowcount=1)
+
+        if "stale_streaming" in sql:
+            cutoff = params.get("stale_before")
+            conversation_id = params.get("conversation_id")
+            affected = [
+                m for m in self.messages_by_id.values()
+                if m.get("conversation_id") == conversation_id
+                and m.get("status") == "streaming"
+                and m.get("created_at") < cutoff
+            ]
+            for row in affected:
+                row["status"] = "failed"
+                row["error_message"] = "stale_streaming"
+                row["completed_at"] = datetime.now(timezone.utc)
+                row["updated_at"] = datetime.now(timezone.utc)
+            return FakeExecResult(rowcount=len(affected))
 
         if "interrupted by server restart" in sql:
             affected = [m for m in self.messages_by_id.values() if m.get("status") == "streaming"]

@@ -1,11 +1,12 @@
-import PageShell from "@/components/layout/PageShell";
-
-export default function AssistantPage() {
+// Step 12 Frontend Slice 2: "no conversation selected" placeholder,
+// rendered inside AssistantShell's main content region (assistant/layout.tsx).
+// Message history, Composer, and streaming are later slices.
+export default function AssistantIndexPage() {
   return (
-    <PageShell title="AI Assistant" description="角色化 Copilot 對話">
-      <p className="text-sm text-foreground/70">
-        尚未開放，等待 Step 12（Copilot Chat / AI Assistant）。
+    <div className="flex h-full items-center justify-center p-8 text-center">
+      <p className="text-sm text-foreground/60">
+        選擇左側的對話，或建立新的對話開始使用 AI Assistant。
       </p>
-    </PageShell>
+    </div>
   );
 }

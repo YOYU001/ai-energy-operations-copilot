@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -247,3 +247,59 @@ class CaseSearchResult(BaseModel):
     case_similarity: str
     matches: list[str]
     differs: list[str]
+
+
+# Step 12 Sub-step 3A slice 2: Conversation CRUD (no /messages endpoint yet
+# -- see docs/step12_substep3a_plan.md). role_mode is Literal, not a bare
+# str, so an invalid value is rejected as a 422 by FastAPI/Pydantic itself,
+# matching the DB CHECK constraint's 4 allowed values (Sub-step 1 schema).
+RoleMode = Literal["operator", "engineer", "executive", "training"]
+
+
+class ConversationCreateRequest(BaseModel):
+    role_mode: Optional[RoleMode] = None
+
+
+class ConversationSummary(BaseModel):
+    id: int
+    title: Optional[str] = None
+    role_mode: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationsPage(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[ConversationSummary]
+
+
+class ChatMessageSummary(BaseModel):
+    id: int
+    role: str
+    content: str
+    status: str
+    parent_user_message_id: Optional[int] = None
+    attempt_number: int
+    is_active: bool
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    finish_reason: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class ConversationDetail(BaseModel):
+    conversation: ConversationSummary
+    messages: list[ChatMessageSummary]
+
+
+class ConversationUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    role_mode: Optional[RoleMode] = None
+
+
+class PostMessageRequest(BaseModel):
+    content: str

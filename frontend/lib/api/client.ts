@@ -9,14 +9,19 @@ import type {
   CasesPage,
   CaseSearchResult,
   CaseSummary,
+  ChatMessageSummary,
   ChunkSummary,
   ColumnStatistics,
+  ConversationDetail,
+  ConversationSummary,
+  ConversationsPage,
   DatasetSummary,
   DatasetSummaryStatistics,
   DocumentSummary,
   DocumentUploadResult,
   HealthResponse,
   PriceThresholdInfo,
+  RoleMode,
   TimeseriesPage,
   TimeseriesRow,
   VersionResponse,
@@ -589,6 +594,162 @@ export async function searchCases(payload: {
   if (!Array.isArray(data) || !data.every(isCaseSearchResult)) {
     throw new Error(
       "API response schema mismatch: /cases/search did not return CaseSearchResult[]",
+    );
+  }
+  return data;
+}
+
+// Step 12 Frontend Slice 1: conversation/message JSON calls -- no
+// streaming here. These are only ever called from the new Route Handlers
+// under app/api/assistant/ (still server-side, same server-only
+// boundary as every function above), never directly from a client
+// component. The two SSE POSTs (send message, regenerate) are proxied
+// with a raw passthrough fetch in the Route Handlers themselves, not
+// through apiFetch (which hardcodes res.json() and a 5s timeout -- both
+// wrong for a long-lived stream).
+
+function isRoleMode(value: unknown): value is RoleMode {
+  return (
+    value === "operator" ||
+    value === "engineer" ||
+    value === "executive" ||
+    value === "training"
+  );
+}
+
+function isNullableRoleMode(value: unknown): value is RoleMode | null {
+  return value === null || isRoleMode(value);
+}
+
+function isConversationSummary(data: unknown): data is ConversationSummary {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.id === "number" &&
+    isNullableString(d.title) &&
+    isNullableRoleMode(d.role_mode) &&
+    typeof d.created_at === "string" &&
+    typeof d.updated_at === "string"
+  );
+}
+
+function isConversationsPage(data: unknown): data is ConversationsPage {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.total === "number" &&
+    typeof d.limit === "number" &&
+    typeof d.offset === "number" &&
+    Array.isArray(d.items) &&
+    d.items.every(isConversationSummary)
+  );
+}
+
+export async function getConversations(
+  limit?: number,
+  offset?: number,
+): Promise<ConversationsPage> {
+  const params = new URLSearchParams();
+  if (limit !== undefined) params.set("limit", String(limit));
+  if (offset !== undefined) params.set("offset", String(offset));
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  const data = await apiFetch(`/conversations${query}`);
+  if (!isConversationsPage(data)) {
+    throw new Error(
+      "API response schema mismatch: /conversations did not return ConversationsPage",
+    );
+  }
+  return data;
+}
+
+export async function createConversation(
+  roleMode?: RoleMode | null,
+): Promise<ConversationSummary> {
+  const data = await apiFetch("/conversations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role_mode: roleMode ?? null }),
+  });
+  if (!isConversationSummary(data)) {
+    throw new Error(
+      "API response schema mismatch: POST /conversations did not return ConversationSummary",
+    );
+  }
+  return data;
+}
+
+function isChatMessageSummary(data: unknown): data is ChatMessageSummary {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.id === "number" &&
+    typeof d.role === "string" &&
+    typeof d.content === "string" &&
+    typeof d.status === "string" &&
+    isNullableNumber(d.parent_user_message_id) &&
+    typeof d.attempt_number === "number" &&
+    typeof d.is_active === "boolean" &&
+    isNullableString(d.provider) &&
+    isNullableString(d.model) &&
+    isNullableString(d.finish_reason) &&
+    isNullableString(d.error_message) &&
+    typeof d.created_at === "string" &&
+    isNullableString(d.completed_at)
+  );
+}
+
+function isConversationDetail(data: unknown): data is ConversationDetail {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    isConversationSummary(d.conversation) &&
+    Array.isArray(d.messages) &&
+    d.messages.every(isChatMessageSummary)
+  );
+}
+
+export async function getConversation(
+  conversationId: number,
+): Promise<ConversationDetail> {
+  const data = await apiFetch(`/conversations/${conversationId}`);
+  if (!isConversationDetail(data)) {
+    throw new Error(
+      `API response schema mismatch: /conversations/${conversationId} did not return ConversationDetail`,
+    );
+  }
+  return data;
+}
+
+export async function updateConversation(
+  conversationId: number,
+  payload: { title?: string | null; role_mode?: RoleMode | null },
+): Promise<ConversationSummary> {
+  const data = await apiFetch(`/conversations/${conversationId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!isConversationSummary(data)) {
+    throw new Error(
+      `API response schema mismatch: PATCH /conversations/${conversationId} did not return ConversationSummary`,
+    );
+  }
+  return data;
+}
+
+export async function archiveConversation(
+  conversationId: number,
+): Promise<void> {
+  await apiFetch(`/conversations/${conversationId}`, { method: "DELETE" });
+}
+
+export async function getConversationMessages(
+  conversationId: number,
+): Promise<ChatMessageSummary[]> {
+  const data = await apiFetch(`/conversations/${conversationId}/messages`);
+  if (!Array.isArray(data) || !data.every(isChatMessageSummary)) {
+    throw new Error(
+      `API response schema mismatch: /conversations/${conversationId}/messages did not return ChatMessageSummary[]`,
     );
   }
   return data;

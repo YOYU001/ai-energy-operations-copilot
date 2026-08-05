@@ -21,6 +21,7 @@ or rolls back.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import text
@@ -33,13 +34,31 @@ class ParentMessageNotFound(Exception):
 
 class InvalidRegenerateTarget(Exception):
     """Raised by create_regenerate_attempt when the referenced message is
-    not a user message (role != 'user'). The caller maps this to a 409."""
+    not a user message (role != 'user'). Per docs/step12_substep3c_plan.md
+    section 4, the caller maps this to a 400 (corrected from an earlier
+    docstring here that said 409, written before that endpoint's contract
+    was decided)."""
 
 
 class ConversationMismatch(Exception):
     """Raised by create_regenerate_attempt when the referenced message
-    belongs to a different conversation than the one supplied. The caller
-    maps this to a 409."""
+    belongs to a different conversation than the one supplied. Per
+    docs/step12_substep3c_plan.md section 4, the caller maps this to a 404
+    (treated identically to "message does not exist", to avoid disclosing
+    that the id belongs to a different conversation -- corrected from an
+    earlier docstring here that said 409)."""
+
+
+class RegenerateAlreadyInProgress(Exception):
+    """Step 12 Sub-step 3C: raised by create_regenerate_attempt when the
+    parent's current active attempt is still status='streaming'. The
+    caller maps this to a 409. This check runs INSIDE the FOR UPDATE-locked
+    transaction on the parent row, not as a separate route-level
+    pre-check -- a route-level SELECT-then-create has a TOCTOU race (two
+    concurrent requests could both pass a plain SELECT before either
+    commits); only a check made inside the same lock scope that also
+    performs the create is race-free. See docs/step12_substep3c_plan.md
+    section 6."""
 
 
 def create_conversation(conn, role_mode: Optional[str] = None) -> int:
@@ -74,10 +93,17 @@ def list_conversations(conn, limit: int, offset: int) -> tuple[int, list[dict]]:
 
 def get_conversation_with_active_messages(conn, conversation_id: int) -> Optional[dict]:
     """Return {"conversation": dict, "messages": list[dict]} for this
-    conversation, or None if it doesn't exist. messages only includes rows
-    where is_active=true, ordered chronologically."""
+    conversation, or None if it doesn't exist OR has been archived --
+    every caller of this function (GET /conversations/{id}, GET
+    /conversations/{id}/messages, POST .../messages, POST .../regenerate)
+    already treats an archived conversation as inaccessible via the
+    general Assistant API, so this is enforced once here rather than
+    duplicated per-caller. Archiving remains a soft-delete: the row is
+    untouched, only ordinary reads/writes through this function stop
+    seeing it. messages only includes rows where is_active=true, ordered
+    chronologically."""
     conversation = conn.execute(
-        text("SELECT * FROM conversations WHERE id = :id"),
+        text("SELECT * FROM conversations WHERE id = :id AND archived_at IS NULL"),
         {"id": conversation_id},
     ).mappings().first()
     if conversation is None:
@@ -106,7 +132,10 @@ def update_conversation(
     passed (None means "leave unchanged" for both title and role_mode, so
     this can be called to rename without also clearing role_mode and vice
     versa). Returns the updated row, or None if conversation_id doesn't
-    exist."""
+    exist OR has been archived -- archived conversations are otherwise
+    inaccessible via this API (get_conversation_with_active_messages
+    already enforces the same rule for reads), so a PATCH must not be able
+    to silently revive/modify one."""
     row = conn.execute(
         text(
             """
@@ -114,7 +143,7 @@ def update_conversation(
             SET title = COALESCE(:title, title),
                 role_mode = COALESCE(:role_mode, role_mode),
                 updated_at = now()
-            WHERE id = :id
+            WHERE id = :id AND archived_at IS NULL
             RETURNING *
             """
         ),
@@ -257,10 +286,12 @@ def create_regenerate_attempt(
 ) -> int:
     """Concurrency-safe regenerate: locks the parent user message with
     SELECT ... FOR UPDATE so concurrent regenerate calls for the same
-    parent serialize instead of racing, validates it, retires the current
-    active attempt, and inserts a new one with attempt_number+1. All
-    statements below run against the same conn; this function issues no
-    commit/rollback of its own -- the caller commits once after this
+    parent serialize instead of racing, validates it, rejects (raises
+    RegenerateAlreadyInProgress) if the current active attempt is still
+    status='streaming' (Step 12 Sub-step 3C), otherwise retires the
+    current active attempt and inserts a new one with attempt_number+1.
+    All statements below run against the same conn; this function issues
+    no commit/rollback of its own -- the caller commits once after this
     returns, or rolls back if it raises.
     """
     parent = conn.execute(
@@ -274,6 +305,21 @@ def create_regenerate_attempt(
     if parent["conversation_id"] != conversation_id:
         raise ConversationMismatch(parent_user_message_id)
 
+    # Step 12 Sub-step 3C: widened to also fetch status (was `SELECT id`
+    # only) so the in-flight guard below can check it without a second
+    # query -- old_active_message_id (used later for
+    # regenerated_from_message_id) is still derived from this same row.
+    old_active = conn.execute(
+        text(
+            "SELECT id, status FROM chat_messages "
+            "WHERE parent_user_message_id = :parent_user_message_id AND is_active = true"
+        ),
+        {"parent_user_message_id": parent_user_message_id},
+    ).mappings().first()
+    if old_active is not None and old_active["status"] == "streaming":
+        raise RegenerateAlreadyInProgress(parent_user_message_id)
+    old_active_message_id = old_active["id"] if old_active else None
+
     max_attempt = conn.execute(
         text(
             "SELECT COALESCE(MAX(attempt_number), 0) AS max_attempt FROM chat_messages "
@@ -281,15 +327,6 @@ def create_regenerate_attempt(
         ),
         {"parent_user_message_id": parent_user_message_id},
     ).mappings().first()["max_attempt"]
-
-    old_active = conn.execute(
-        text(
-            "SELECT id FROM chat_messages "
-            "WHERE parent_user_message_id = :parent_user_message_id AND is_active = true"
-        ),
-        {"parent_user_message_id": parent_user_message_id},
-    ).mappings().first()
-    old_active_message_id = old_active["id"] if old_active else None
 
     conn.execute(
         text(
@@ -327,6 +364,69 @@ def create_regenerate_attempt(
         },
     ).scalar_one()
     return new_id
+
+
+def record_tool_activity(
+    conn,
+    message_id: int,
+    tool_calls: Optional[list[dict]],
+    citations: Optional[list[dict]],
+) -> int:
+    """Step 12 Sub-step 3B: persists this message's tool-call audit trail
+    and structured citations into the tool_calls/citations JSONB columns
+    (added by the Sub-step 1 migration, unused until this function).
+    Deliberately a separate function rather than a new parameter on
+    finalize_assistant_message -- keeps that function single-purpose
+    (status-transition only), matching the earlier decision not to widen
+    its signature. Callers run this in the same connection/transaction as
+    finalize_assistant_message, after it, and commit once for both.
+    Returns rows affected (0 or 1)."""
+    result = conn.execute(
+        text(
+            """
+            UPDATE chat_messages
+            SET tool_calls = CAST(:tool_calls AS JSONB),
+                citations = CAST(:citations AS JSONB),
+                updated_at = now()
+            WHERE id = :message_id
+            """
+        ),
+        {
+            "message_id": message_id,
+            "tool_calls": json.dumps(tool_calls) if tool_calls is not None else None,
+            "citations": json.dumps(citations) if citations is not None else None,
+        },
+    )
+    return result.rowcount
+
+
+def mark_stale_streaming_attempts_for_conversation(conn, conversation_id: int, stale_before: datetime) -> int:
+    """Step 12 Sub-step 3C: read-time stale-recovery, scoped to one
+    conversation and called explicitly by the route before it reads
+    (docs/step12_substep3c_plan.md section 3) -- deliberately NOT hidden
+    inside get_conversation_with_active_messages, which stays a pure read
+    with no side effects. Idempotent: the WHERE status='streaming' guard
+    is the same mechanism finalize_assistant_message already relies on,
+    so a message a concurrent request is genuinely still finalizing can
+    never be double-transitioned by this call. stale_before is computed
+    and passed in by the caller (not "now() - interval" computed here) so
+    tests can supply a deterministic cutoff without waiting."""
+    result = conn.execute(
+        text(
+            """
+            UPDATE chat_messages
+            SET status = 'failed',
+                error_message = 'stale_streaming',
+                completed_at = now(),
+                updated_at = now()
+            WHERE conversation_id = :conversation_id
+              AND status = 'streaming'
+              AND created_at < :stale_before
+            """
+        ),
+        {"conversation_id": conversation_id, "stale_before": stale_before},
+    )
+    return result.rowcount
 
 
 def mark_stale_streaming_messages_as_failed(conn) -> int:
