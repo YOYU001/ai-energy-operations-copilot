@@ -129,6 +129,23 @@ def test_update_conversation_only_overwrites_supplied_fields():
     assert row["role_mode"] == "executive"
 
 
+def test_update_conversation_returns_none_when_archived():
+    conn = FakeConversationsConnection()
+    conversation_id = create_conversation(conn, role_mode="operator")
+    archive_conversation(conn, conversation_id)
+
+    result = update_conversation(conn, conversation_id, title="sneaky rename")
+
+    assert result is None
+    assert conn.conversations_by_id[conversation_id]["title"] is None
+    assert conn.conversations_by_id[conversation_id]["role_mode"] == "operator"
+
+
+def test_update_conversation_returns_none_when_absent():
+    conn = FakeConversationsConnection()
+    assert update_conversation(conn, 999, title="x") is None
+
+
 def test_archive_conversation_returns_zero_when_already_archived():
     conn = FakeConversationsConnection()
     conversation_id = create_conversation(conn)

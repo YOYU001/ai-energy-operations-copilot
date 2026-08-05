@@ -483,7 +483,7 @@ class FakeConversationsConnection:
 
         if "UPDATE conversations" in sql and "SET title = COALESCE" in sql:
             row = self.conversations_by_id.get(params.get("id"))
-            if row is None:
+            if row is None or row["archived_at"] is not None:
                 return FakeExecResult(rows=[])
             if params.get("title") is not None:
                 row["title"] = params["title"]

@@ -132,7 +132,10 @@ def update_conversation(
     passed (None means "leave unchanged" for both title and role_mode, so
     this can be called to rename without also clearing role_mode and vice
     versa). Returns the updated row, or None if conversation_id doesn't
-    exist."""
+    exist OR has been archived -- archived conversations are otherwise
+    inaccessible via this API (get_conversation_with_active_messages
+    already enforces the same rule for reads), so a PATCH must not be able
+    to silently revive/modify one."""
     row = conn.execute(
         text(
             """
@@ -140,7 +143,7 @@ def update_conversation(
             SET title = COALESCE(:title, title),
                 role_mode = COALESCE(:role_mode, role_mode),
                 updated_at = now()
-            WHERE id = :id
+            WHERE id = :id AND archived_at IS NULL
             RETURNING *
             """
         ),

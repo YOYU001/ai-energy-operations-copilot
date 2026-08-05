@@ -258,6 +258,24 @@ def test_patch_conversation_404_when_absent():
     assert response.status_code == 404
 
 
+def test_patch_conversation_404_when_archived():
+    """Archived conversations must not be modifiable via PATCH -- same
+    inaccessibility rule as GET (test_get_conversation_detail_404_when_archived)."""
+    conn = FakeConversationsConnection()
+    _use_fake_connection(conn)
+    try:
+        client.post("/conversations", json={"role_mode": "operator"})
+        client.delete("/conversations/1")
+        response = client.patch("/conversations/1", json={"title": "sneaky rename"})
+    finally:
+        _clear_override()
+
+    assert response.status_code == 404
+    # the archived row's fields must be untouched by the rejected PATCH
+    assert conn.conversations_by_id[1]["title"] is None
+    assert conn.conversations_by_id[1]["role_mode"] == "operator"
+
+
 def test_patch_conversation_rejects_invalid_role_mode():
     conn = FakeConversationsConnection()
     _use_fake_connection(conn)
