@@ -212,6 +212,83 @@ def test_regenerate_works_after_aborted_attempt(monkeypatch):
     assert "regenerated answer" in response.text
 
 
+# ---------------------------------------------------------------------------
+# Regenerate context must not include the superseded assistant reply
+# ---------------------------------------------------------------------------
+
+
+class _RecordingProvider:
+    """Like _FakeCompletingProvider, but records the `messages` argument so
+    tests can assert exactly what context was sent to the provider."""
+
+    provider_name = "fake"
+    model_name = "fake-model"
+
+    def __init__(self):
+        self.received_messages: list = None
+
+    def stream_chat(self, messages, tools=None):
+        self.received_messages = messages
+
+        async def _gen():
+            yield ChatDeltaEvent(delta="regenerated answer")
+            yield ChatFinishEvent(finish_reason="stop", usage=None)
+
+        return _gen()
+
+
+def test_regenerate_context_excludes_superseded_assistant_reply(monkeypatch):
+    conn = FakeConversationsConnection()
+    conversation_id, user_message_id, first_attempt_id = _seed_conversation_with_finalized_attempt(conn, "completed")
+    _use_fake_get_connection(monkeypatch, conn)
+
+    recording_provider = _RecordingProvider()
+    monkeypatch.setattr(main_module, "_build_chat_provider", lambda: recording_provider)
+
+    response = client.post(f"/conversations/{conversation_id}/messages/{user_message_id}/regenerate")
+
+    assert response.status_code == 200
+    assert recording_provider.received_messages is not None
+
+    contents = [m["content"] for m in recording_provider.received_messages]
+    # the parent user message must appear exactly once (as the new turn),
+    # not duplicated from conversation history
+    assert contents.count("please summarize the weather today") == 1
+    # the superseded first attempt's answer must not leak into context
+    assert "first answer" not in contents
+
+
+def test_regenerate_context_keeps_earlier_legitimate_history(monkeypatch):
+    conn = FakeConversationsConnection()
+    conversation_id = create_conversation(conn)
+    earlier_user_id = insert_user_message(conn, conversation_id, "what is the site's current SOC?")
+    earlier_attempt_id = create_streaming_assistant_placeholder(
+        conn, conversation_id, earlier_user_id, 1, "openai", "gpt-4o-mini"
+    )
+    finalize_assistant_message(conn, earlier_attempt_id, "SOC is 80%", "completed", None, "stop", None)
+
+    user_message_id = insert_user_message(conn, conversation_id, "please summarize the weather today")
+    first_attempt_id = create_streaming_assistant_placeholder(
+        conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini"
+    )
+    finalize_assistant_message(conn, first_attempt_id, "first answer", "completed", None, "stop", None)
+
+    _use_fake_get_connection(monkeypatch, conn)
+    recording_provider = _RecordingProvider()
+    monkeypatch.setattr(main_module, "_build_chat_provider", lambda: recording_provider)
+
+    response = client.post(f"/conversations/{conversation_id}/messages/{user_message_id}/regenerate")
+
+    assert response.status_code == 200
+    contents = [m["content"] for m in recording_provider.received_messages]
+
+    # earlier, unrelated turn is preserved
+    assert "what is the site's current SOC?" in contents
+    assert "SOC is 80%" in contents
+    # superseded reply to the message being regenerated is still excluded
+    assert "first answer" not in contents
+
+
 def test_regenerate_409_when_first_attempt_still_streaming(monkeypatch):
     conn = FakeConversationsConnection()
     conversation_id = create_conversation(conn)

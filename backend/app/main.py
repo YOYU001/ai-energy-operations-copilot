@@ -1107,7 +1107,16 @@ async def post_regenerate(conversation_id: int, message_id: int, request: Reques
         conn.commit()
 
         parent_content = parent_message["content"]
-        prior_messages = [m for m in detail["messages"] if m["id"] != message_id]
+        # detail was fetched before create_regenerate_attempt flipped the
+        # previous attempt's is_active to false, so it can still contain
+        # that soon-to-be-superseded assistant reply -- exclude it here by
+        # parent_user_message_id, not just is_active, or the provider would
+        # see an answer that's about to be replaced by this very call.
+        prior_messages = [
+            m
+            for m in detail["messages"]
+            if m["id"] != message_id and m.get("parent_user_message_id") != message_id
+        ]
     # connection closed here -- before generate() is ever called.
 
     is_diagnostic = looks_like_diagnostic_question(parent_content)
