@@ -4,7 +4,7 @@
 打造 **AI Energy Operations Copilot MVP v1**，作為 NVIDIA 面試作品集與 AI 工程能力展示專案。
 
 ## Current Phase
-Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → Step 10：Knowledge Base / RAG（正式版）8 個 sub-step 全數完成並正式結案 → Step 11：Case Similarity — backend、frontend 均已完成並驗收通過 → **Step 12：AI Assistant / Chat UI — backend 已完成並驗收通過（Sub-step 1–3C：Conversation CRUD、Message read API、SSE streaming、controlled tool orchestration、Internal Knowledge Only guard、七段式回答、regenerate lifecycle、startup/read-time recovery，全專案 500 個測試通過）**。下一步：**Step 12 frontend — `/assistant` ChatGPT 風格 Chat UI planning**。
+Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → Step 10：Knowledge Base / RAG（正式版）8 個 sub-step 全數完成並正式結案 → Step 11：Case Similarity — backend、frontend 均已完成並驗收通過 → **Step 12：AI Assistant / Chat UI — backend（Sub-step 1–3C）與 frontend（Slice 1–5）均已完成並驗收通過**。`/assistant` 現已具備完整聊天流程：conversation 管理（建立／選取／封存／reload 恢復）、message history（parent-based ordering、四種狀態顯示）、Composer 送出與 SSE token streaming、Stop generating、tool activity 面板、regenerate lifecycle，全專案 503 個測試通過，frontend lint／`tsc --noEmit`／build 全數通過，desktop 手動驗證無 blocker。下一步：**Step 12 收尾（建立 PR、review／merge）**。
 
 ## Completed
 - 定義 MVP v1 產品範圍、技術棧、Internal Knowledge Only 原則、初版 data schema，以及 Claude Code learning-by-building / 漸進式開發流程。
@@ -46,6 +46,9 @@ Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Documen
 - Step 12 Sub-step 3A — Streaming API：`ChatProvider`（`AsyncOpenAI`）、conversation CRUD、`GET /conversations/{id}/messages` read model、`POST /conversations/{id}/messages` SSE（Phase A/B/C 連線邊界、idle/overall timeout、disconnect→aborted、finalize 兩次重試 fallback）。commit 25f6a49。Details: docs/step12_substep3a_plan.md、docs/step12_slice4_plan.md。
 - Step 12 Sub-step 3B — Controlled Tool Orchestration：closed 5-tool registry、deterministic capability guard（未達診斷門檻零 tool call 即回「資料不足」）、3 rounds／5 calls 上限、七段式 Markdown 回答結構。修正一個真實安全缺口：orchestration round 文字改為全程 buffer、只有 tools=None 的 final synthesis round 才即時串流，確保前端看到的 token 與 DB 最終 content 完全一致。commit 82b1907。Details: docs/step12_substep3b_plan.md。
 - Step 12 Sub-step 3C — Regenerate Lifecycle / Recovery：`POST /conversations/{id}/messages/{message_id}/regenerate`（400/404/409 完整分流，in-flight guard 移入 `create_regenerate_attempt` 的 `FOR UPDATE` 交易內，避免 route pre-check 的 TOCTOU）、FastAPI `lifespan` 啟動時一次性 reconciliation、獨立的讀取時 stale cleanup query primitive（5 分鐘門檻）。全專案 500 個測試通過，含真實 DB 併發測試。commit f087be2。Details: docs/step12_substep3c_plan.md。
+- Step 12 Frontend Slice 1–5 — `/assistant` Chat UI 正式結案，全數驗收通過：server-only API proxy（`lib/api/client.ts` + `app/api/assistant/*`，SSE 直接 passthrough 不重組）與唯一 SSE parser（`lib/assistant/sse.ts`）；route-based conversation 導覽（建立／選取／URL 同步／reload 恢復／封存／not-found）；conversation list 的 loading／empty／error UX；message history 依 `parent_user_message_id` 分組排序，四種狀態（completed/streaming/failed/aborted）正確顯示。Details: docs/step12_frontend_chat_ui_plan.md。
+- Step 12 Frontend Slice 4–5 — Composer + optimistic UI + token streaming + Stop generating：`ChatThread.tsx` 為唯一 client state owner（8 種 request phase、bounded reconciliation 最多重試 3 次）；tool activity 面板（`<details>` 預設收合，僅本頁 session 保留）；regenerate lifecycle 用 `parent_user_message_id`、409 不重送、新 attempt 永久維持在原 user message 下方。Details: docs/step12_slice4_plan.md。
+- Step 12 Frontend 整體收尾驗收：desktop 全流程手動驗證，全專案 503 個測試通過，lint／`tsc --noEmit`／build 全數通過，無 blocker；mobile 視覺驗證待補（見 Current Known Issues）。Details: docs/step12_frontend_chat_ui_plan.md。
 
 ## Important Decisions
 - Frontend：Next.js
@@ -115,9 +118,13 @@ MVP v1 應涵蓋：
 - Step 11 `POST /cases/search` 沒有「相關度過低就回傳空陣列」的 cutoff 邏輯，永遠回傳 `top_k` 筆（只是 confidence 標為低相關），因此 frontend 的「搜尋無結果」EmptyState 在目前 13 筆真實 seed 資料下無法自然觸發（只在 mock API 驗證過畫面本身正確）；未來若要真的支援零結果情境，需在 backend 加低分過濾門檻。
 - Step 11 confidence／symptoms_similarity 的分數門檻（`CONFIDENCE_THRESHOLDS`、`SYMPTOMS_SIMILARITY_THRESHOLDS`）明確標註為 PROVISIONAL，尚未用真實使用情境校準。
 - Step 11 frontend 手機窄螢幕（~752px 寬）已用瀏覽器 responsive mode 驗證過 `/cases` 與 `/cases/[case_id]`（card 排版、長 event_type 換行、matches/differs 標籤、分頁按鈕皆正常），但未涵蓋更窄的手機寬度（如 375px 以下）。
+- Step 12 frontend `/assistant` 的 375×812、390×844 手機視覺驗證尚未以真實 viewport 完成；目前工具環境的 `resize_window` 不可靠（回報成功但實際 `window.innerWidth/innerHeight` 不符），已如實記錄為待補，未用 CSS zoom 做假驗證。
+- Step 12 frontend tool activity 只保留在目前頁面 session（`ChatThread` 的 `activityByMessageId` 是純前端 state），reload 或切換對話後就會消失；backend `ChatMessageSummary` 目前不回傳 `tool_calls`，這是已知、非本階段要修的 backend gap。
+- Step 12 frontend citation panel 尚未實作，assistant 回覆裡的 `# Citations` 段落目前只是純文字，非結構化面板。
+- Step 12 frontend role mode selector 尚未實作，Composer 目前沒有角色化回答模式的切換入口（對應 MVP v1 Scope 第 9 項的 UI 部分尚缺，backend `role_mode` 欄位已存在可用）。
 
 ## Next Step
-**Step 12 frontend — `/assistant` ChatGPT 風格 Chat UI planning**。Backend 已完整完成並驗收通過：Conversation CRUD、Message read API、SSE streaming（two-phase 設計確保 token 與 DB content 一致）、controlled tool orchestration、Internal Knowledge Only guard、七段式回答結構、regenerate lifecycle、startup/read-time recovery，全專案 500 個測試通過（見 Completed，Sub-step 1–3C）。下一步：先做前端 architecture investigation + implementation plan（對照 `.claude/rules/frontend/react.md` 的 ChatGPT 風格要求與既有 `lib/api/` 慣例），經確認後才開始實作。
+**Step 12 收尾**：backend（Sub-step 1–3C）與 frontend（Slice 1–5）均已完成並驗收通過，下一步是建立 PR 並進行 review／merge。Role mode selector 與 citation panel 列為後續 enhancement（見 Current Known Issues），不是 Step 12 完成認定的 blocker。
 
 ## Files To Read Next Time
 每次一定要先讀：
