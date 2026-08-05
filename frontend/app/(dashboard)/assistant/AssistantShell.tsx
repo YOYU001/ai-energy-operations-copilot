@@ -31,6 +31,20 @@ export default function AssistantShell({
   const selectedId = params.conversationId ? Number(params.conversationId) : null;
 
   const [conversations, setConversations] = useState(initialConversations);
+  // Step 12 review fix: initialConversations is re-supplied by the parent
+  // server component on every router.refresh() (e.g. after the first
+  // message auto-generates a title, or the backend re-sorts by
+  // updated_at) -- but local state, once seeded via useState's initial
+  // value, does not pick up later prop changes on its own. Without this,
+  // the sidebar keeps showing stale titles/ordering until a hard reload.
+  // Adjusted during render (react.dev's "adjusting state on prop change"
+  // pattern), not in an effect, to avoid an extra render pass.
+  const [prevInitialConversations, setPrevInitialConversations] = useState(initialConversations);
+  if (initialConversations !== prevInitialConversations) {
+    setPrevInitialConversations(initialConversations);
+    setConversations(initialConversations);
+  }
+
   const [isCreating, setIsCreating] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
