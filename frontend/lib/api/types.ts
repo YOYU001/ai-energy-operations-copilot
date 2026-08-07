@@ -119,6 +119,105 @@ export interface AnalysisRunResponse {
   result: BatteryDischargeAnalysisResult;
 }
 
+// Step 13 -- Cost Estimation (Sub-step 13.5). Mirrors backend/app/schemas.py.
+export interface AnalysisNote {
+  type: string;
+  count: number;
+  sample_timestamps: string[];
+  site_id: string | null;
+}
+
+export interface ScoringSignalFlag {
+  signal: string;
+  interval_start: string;
+  interval_end: string;
+}
+
+export interface CostInterval {
+  site_id: string;
+  interval_start: string;
+  interval_end: string;
+  duration_hours: number;
+  energy_kwh: number;
+  estimated_cost: number;
+  battery_arbitrage: number | null;
+}
+
+export interface CostSiteResult {
+  site_id: string;
+  row_count: number;
+  interval_count: number;
+  intervals: CostInterval[];
+  total_energy_cost: number;
+  total_arbitrage_saving: number;
+  over_contract_penalty_flags: ScoringSignalFlag[];
+  warnings: AnalysisNote[];
+  limitations: AnalysisNote[];
+}
+
+export interface CostAnalysisResult {
+  rule: string;
+  rule_version: string;
+  max_expected_interval_hours: number;
+  site_count: number;
+  per_site: CostSiteResult[];
+  dataset_aggregate: CostSiteResult;
+}
+
+export interface CostRunResponse {
+  analysis_run_id: number;
+  dataset_id: number;
+  analysis_type: string;
+  rule_version: string;
+  created_at: string;
+  result: CostAnalysisResult;
+}
+
+// Step 13 -- Green Operations Index (Sub-step 13.6). Mirrors backend/app/schemas.py.
+export type GreenOpsComponentName =
+  | "pv_utilization"
+  | "battery_operation"
+  | "grid_dependency"
+  | "battery_health";
+
+export type GreenOpsComponentStatus = "computed" | "insufficient_data";
+
+export interface GreenOpsComponentScore {
+  component: GreenOpsComponentName;
+  max_score: number;
+  score: number | null;
+  status: GreenOpsComponentStatus;
+  eligible_duration_hours: number | null;
+  flagged_duration_hours: number | null;
+  penalty_reasons: string[];
+}
+
+export interface GreenOpsSiteResult {
+  site_id: string;
+  components: GreenOpsComponentScore[];
+  second_life_bonus: number | null;
+  total_score: number | null;
+  warnings: AnalysisNote[];
+}
+
+export interface GreenOpsAnalysisResult {
+  rule: string;
+  rule_version: string;
+  max_expected_interval_hours: number;
+  site_count: number;
+  per_site: GreenOpsSiteResult[];
+  dataset_aggregate: GreenOpsSiteResult;
+}
+
+export interface GreenOpsRunResponse {
+  analysis_run_id: number;
+  dataset_id: number;
+  analysis_type: string;
+  rule_version: string;
+  created_at: string;
+  result: GreenOpsAnalysisResult;
+}
+
 export interface DocumentSummary {
   id: number;
   title: string | null;

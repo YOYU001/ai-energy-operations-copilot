@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -38,6 +39,7 @@ from app.datasets_queries import (
     get_dataset_summary,
     get_dataset_timeseries,
     get_dataset_timeseries_for_analysis,
+    get_dataset_timeseries_for_scheduling_cost_green_ops,
     insert_analysis_run,
     list_datasets,
 )
@@ -66,12 +68,18 @@ from app.schemas import (
     ConversationsPage,
     ConversationSummary,
     ConversationUpdateRequest,
+    CostAnalysisResult,
+    CostRunResponse,
     DatasetSummary,
     DatasetSummaryStatistics,
     DocumentSummary,
     DocumentUploadResult,
+    GreenOpsAnalysisResult,
+    GreenOpsRunResponse,
     IngestResult,
     PostMessageRequest,
+    ScheduleAnalysisResult,
+    ScheduleRunResponse,
     TimeseriesPage,
 )
 from app.services.case_retrieval import (
@@ -103,6 +111,7 @@ from app.services.rule_engine import (
     RULE_VERSION,
     evaluate_battery_should_discharge_but_did_not,
 )
+from app.services import battery_scheduling, cost_estimation, green_operations_index
 from app.services.tool_registry import (
     TOOL_SCHEMAS,
     ToolExecutionError,
@@ -413,6 +422,265 @@ def post_dataset_analysis(dataset_id: int, conn=Depends(get_db_dependency)):
         inserted = get_analysis_run(conn, dataset_id, ANALYSIS_TYPE, RULE_VERSION)
 
     return _analysis_run_to_response(inserted)
+
+
+# ---------------------------------------------------------------------------
+# Step 13 -- Rule-Based Scheduling / Cost / Green Operations Index.
+# See docs/step13_rules_and_api_design.md for the rule design and
+# 2026-08-05/06 decisions (endpoint contract, analysis-run identity for
+# max_expected_interval_hours). Persistence reuses get_analysis_run /
+# insert_analysis_run unchanged; battery_scheduling has no runtime
+# parameter, so its rule_version stays the bare module constant. cost /
+# green-operations-index take max_expected_interval_hours, which is folded
+# into rule_version via _canonical_max_gap_suffix so different parameter
+# values never collide onto the same analysis_runs row (2026-08-06 decision:
+# repr()-based canonicalization, not fixed-decimal rounding).
+# ---------------------------------------------------------------------------
+
+
+def _require_valid_max_gap(value: float) -> float:
+    """HTTP-boundary validation for max_expected_interval_hours -- FastAPI's
+    Query(gt=0) alone would still accept float('inf') (inf > 0 is True in
+    Python), so finiteness is checked explicitly here."""
+    if not math.isfinite(value) or value <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail="max_expected_interval_hours must be a finite number greater than 0",
+        )
+    return value
+
+
+def _canonical_max_gap_suffix(value: float) -> str:
+    """repr()'s shortest round-trip representation, not fixed-decimal
+    formatting -- 6, 6.0, and 6e0 all become the same Python float and thus
+    the same suffix, but two genuinely distinct representable floats always
+    produce different suffixes (no rounding-induced collision).
+
+    Normalizes via float(value) first so this guarantee holds for ANY
+    caller, not just the FastAPI Query(float) route parameters that happen
+    to already be float today -- an int 6 and a float 6.0 must canonicalize
+    identically regardless of what type a future caller passes in."""
+    canonical_value = float(value)
+    if not math.isfinite(canonical_value) or canonical_value <= 0:
+        raise ValueError("max_expected_interval_hours must be finite and greater than 0")
+    return f"max_gap_hours={canonical_value!r}"
+
+
+def _cost_rule_version(max_expected_interval_hours: float) -> str:
+    return f"{cost_estimation.RULE_VERSION}+{_canonical_max_gap_suffix(max_expected_interval_hours)}"
+
+
+def _green_ops_rule_version(max_expected_interval_hours: float) -> str:
+    return f"{green_operations_index.RULE_VERSION}+{_canonical_max_gap_suffix(max_expected_interval_hours)}"
+
+
+def _schedule_run_to_response(run: dict) -> ScheduleRunResponse:
+    return ScheduleRunResponse(
+        analysis_run_id=run["id"],
+        dataset_id=run["dataset_id"],
+        analysis_type=run["analysis_type"],
+        rule_version=run["rule_version"],
+        created_at=run["created_at"],
+        result=ScheduleAnalysisResult.model_validate(run["result_json"]),
+    )
+
+
+@app.get("/datasets/{dataset_id}/schedule", response_model=ScheduleRunResponse)
+def get_dataset_schedule(dataset_id: int, conn=Depends(get_db_dependency)):
+    if get_dataset_by_id(conn, dataset_id) is None:
+        raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
+
+    run = get_analysis_run(conn, dataset_id, battery_scheduling.ANALYSIS_TYPE, battery_scheduling.RULE_VERSION)
+    if run is None:
+        raise HTTPException(status_code=404, detail="no schedule analysis run yet for this dataset")
+    return _schedule_run_to_response(run)
+
+
+@app.post("/datasets/{dataset_id}/schedule", response_model=ScheduleRunResponse)
+def post_dataset_schedule(dataset_id: int, conn=Depends(get_db_dependency)):
+    dataset = get_dataset_by_id(conn, dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
+
+    existing = get_analysis_run(conn, dataset_id, battery_scheduling.ANALYSIS_TYPE, battery_scheduling.RULE_VERSION)
+    if existing is not None:
+        return _schedule_run_to_response(existing)
+
+    if dataset["row_count"] is not None and dataset["row_count"] > MAX_ANALYSIS_ROWS:
+        raise HTTPException(
+            status_code=422,
+            detail="Dataset contains too many rows for the current MVP analysis limit.",
+        )
+
+    rows = get_dataset_timeseries_for_scheduling_cost_green_ops(conn, dataset_id)
+    result = battery_scheduling.evaluate_battery_scheduling(rows)
+
+    try:
+        inserted = insert_analysis_run(
+            conn,
+            dataset_id=dataset_id,
+            analysis_type=battery_scheduling.ANALYSIS_TYPE,
+            rule_version=battery_scheduling.RULE_VERSION,
+            result_json=result.model_dump_json(),
+            created_at=datetime.now(timezone.utc),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    if inserted is None:
+        inserted = get_analysis_run(conn, dataset_id, battery_scheduling.ANALYSIS_TYPE, battery_scheduling.RULE_VERSION)
+
+    return _schedule_run_to_response(inserted)
+
+
+def _cost_run_to_response(run: dict) -> CostRunResponse:
+    return CostRunResponse(
+        analysis_run_id=run["id"],
+        dataset_id=run["dataset_id"],
+        analysis_type=run["analysis_type"],
+        rule_version=run["rule_version"],
+        created_at=run["created_at"],
+        result=CostAnalysisResult.model_validate(run["result_json"]),
+    )
+
+
+@app.get("/datasets/{dataset_id}/cost", response_model=CostRunResponse)
+def get_dataset_cost(
+    dataset_id: int,
+    max_expected_interval_hours: float = Query(...),
+    conn=Depends(get_db_dependency),
+):
+    max_expected_interval_hours = _require_valid_max_gap(max_expected_interval_hours)
+    if get_dataset_by_id(conn, dataset_id) is None:
+        raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
+
+    rule_version = _cost_rule_version(max_expected_interval_hours)
+    run = get_analysis_run(conn, dataset_id, cost_estimation.ANALYSIS_TYPE, rule_version)
+    if run is None:
+        raise HTTPException(status_code=404, detail="no cost analysis run yet for this dataset and parameters")
+    return _cost_run_to_response(run)
+
+
+@app.post("/datasets/{dataset_id}/cost", response_model=CostRunResponse)
+def post_dataset_cost(
+    dataset_id: int,
+    max_expected_interval_hours: float = Query(...),
+    conn=Depends(get_db_dependency),
+):
+    max_expected_interval_hours = _require_valid_max_gap(max_expected_interval_hours)
+    dataset = get_dataset_by_id(conn, dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
+
+    rule_version = _cost_rule_version(max_expected_interval_hours)
+    existing = get_analysis_run(conn, dataset_id, cost_estimation.ANALYSIS_TYPE, rule_version)
+    if existing is not None:
+        return _cost_run_to_response(existing)
+
+    if dataset["row_count"] is not None and dataset["row_count"] > MAX_ANALYSIS_ROWS:
+        raise HTTPException(
+            status_code=422,
+            detail="Dataset contains too many rows for the current MVP analysis limit.",
+        )
+
+    rows = get_dataset_timeseries_for_scheduling_cost_green_ops(conn, dataset_id)
+    result = cost_estimation.evaluate_cost_estimation(rows, max_expected_interval_hours)
+
+    try:
+        inserted = insert_analysis_run(
+            conn,
+            dataset_id=dataset_id,
+            analysis_type=cost_estimation.ANALYSIS_TYPE,
+            rule_version=rule_version,
+            result_json=result.model_dump_json(),
+            created_at=datetime.now(timezone.utc),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    if inserted is None:
+        inserted = get_analysis_run(conn, dataset_id, cost_estimation.ANALYSIS_TYPE, rule_version)
+
+    return _cost_run_to_response(inserted)
+
+
+def _green_ops_run_to_response(run: dict) -> GreenOpsRunResponse:
+    return GreenOpsRunResponse(
+        analysis_run_id=run["id"],
+        dataset_id=run["dataset_id"],
+        analysis_type=run["analysis_type"],
+        rule_version=run["rule_version"],
+        created_at=run["created_at"],
+        result=GreenOpsAnalysisResult.model_validate(run["result_json"]),
+    )
+
+
+@app.get("/datasets/{dataset_id}/green-operations-index", response_model=GreenOpsRunResponse)
+def get_dataset_green_operations_index(
+    dataset_id: int,
+    max_expected_interval_hours: float = Query(...),
+    conn=Depends(get_db_dependency),
+):
+    max_expected_interval_hours = _require_valid_max_gap(max_expected_interval_hours)
+    if get_dataset_by_id(conn, dataset_id) is None:
+        raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
+
+    rule_version = _green_ops_rule_version(max_expected_interval_hours)
+    run = get_analysis_run(conn, dataset_id, green_operations_index.ANALYSIS_TYPE, rule_version)
+    if run is None:
+        raise HTTPException(
+            status_code=404, detail="no green operations index analysis run yet for this dataset and parameters"
+        )
+    return _green_ops_run_to_response(run)
+
+
+@app.post("/datasets/{dataset_id}/green-operations-index", response_model=GreenOpsRunResponse)
+def post_dataset_green_operations_index(
+    dataset_id: int,
+    max_expected_interval_hours: float = Query(...),
+    conn=Depends(get_db_dependency),
+):
+    max_expected_interval_hours = _require_valid_max_gap(max_expected_interval_hours)
+    dataset = get_dataset_by_id(conn, dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
+
+    rule_version = _green_ops_rule_version(max_expected_interval_hours)
+    existing = get_analysis_run(conn, dataset_id, green_operations_index.ANALYSIS_TYPE, rule_version)
+    if existing is not None:
+        return _green_ops_run_to_response(existing)
+
+    if dataset["row_count"] is not None and dataset["row_count"] > MAX_ANALYSIS_ROWS:
+        raise HTTPException(
+            status_code=422,
+            detail="Dataset contains too many rows for the current MVP analysis limit.",
+        )
+
+    rows = get_dataset_timeseries_for_scheduling_cost_green_ops(conn, dataset_id)
+    result = green_operations_index.evaluate_green_operations_index(rows, max_expected_interval_hours)
+
+    try:
+        inserted = insert_analysis_run(
+            conn,
+            dataset_id=dataset_id,
+            analysis_type=green_operations_index.ANALYSIS_TYPE,
+            rule_version=rule_version,
+            result_json=result.model_dump_json(),
+            created_at=datetime.now(timezone.utc),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    if inserted is None:
+        inserted = get_analysis_run(conn, dataset_id, green_operations_index.ANALYSIS_TYPE, rule_version)
+
+    return _green_ops_run_to_response(inserted)
 
 
 def _build_embedding_provider() -> EmbeddingProvider:

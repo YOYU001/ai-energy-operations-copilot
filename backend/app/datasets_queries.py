@@ -1,6 +1,19 @@
+from decimal import Decimal
+
 from sqlalchemy import text
 
 from app.ingestion import ALL_ENERGY_TIMESERIES_COLUMNS, NUMERIC_FLOAT_COLUMNS, NUMERIC_INT_COLUMNS
+
+
+def _normalize_numeric_row(row: dict) -> dict:
+    """psycopg2 returns Postgres NUMERIC columns as decimal.Decimal, not
+    float -- every Step 9/13 rule module does `float_literal * df[column]`,
+    which raises TypeError against a Decimal-typed column (real bug found
+    while planning Step 13 Sub-step 13.4, never caught before because every
+    existing test used FakeConnection, which only ever hands back native
+    Python types). Converts only Decimal -> float; None, datetime, bool,
+    str, and already-float/int values pass through unchanged."""
+    return {key: float(value) if isinstance(value, Decimal) else value for key, value in row.items()}
 
 LIST_DATASETS_SQL = text(
     """
@@ -144,7 +157,46 @@ def get_dataset_timeseries_for_analysis(conn, dataset_id):
     in main.py) before calling this — there is no LIMIT here by design.
     """
     rows = conn.execute(GET_TIMESERIES_FOR_ANALYSIS_SQL, {"dataset_id": dataset_id}).mappings().all()
-    return [dict(row) for row in rows]
+    return [_normalize_numeric_row(dict(row)) for row in rows]
+
+
+GET_TIMESERIES_FOR_SCHEDULING_COST_GREEN_OPS_SQL = text(
+    """
+    SELECT
+        timestamp,
+        site_id,
+        electricity_price,
+        grid_import_kw,
+        grid_export_kw,
+        contract_capacity_kw,
+        battery_soc,
+        battery_soh,
+        battery_power_kw,
+        battery_temperature,
+        battery_health_status,
+        battery_is_second_life,
+        pv_actual_kw,
+        load_kw
+    FROM energy_timeseries
+    WHERE dataset_id = :dataset_id
+    ORDER BY timestamp ASC NULLS LAST, id ASC
+    """
+)
+
+
+def get_dataset_timeseries_for_scheduling_cost_green_ops(conn, dataset_id):
+    """Full column set needed by app.services.battery_scheduling /
+    cost_estimation / green_operations_index (Step 13). Deliberately
+    separate from get_dataset_timeseries_for_analysis (Step 9's single
+    anomaly rule only needs 6 columns) so Step 13 carries zero risk to that
+    existing, already-shipped query and its callers. No LIMIT here, same
+    reasoning as get_dataset_timeseries_for_analysis -- callers must guard
+    against oversized datasets themselves (MAX_ANALYSIS_ROWS in main.py).
+    """
+    rows = conn.execute(
+        GET_TIMESERIES_FOR_SCHEDULING_COST_GREEN_OPS_SQL, {"dataset_id": dataset_id}
+    ).mappings().all()
+    return [_normalize_numeric_row(dict(row)) for row in rows]
 
 
 GET_ANALYSIS_RUN_SQL = text(
