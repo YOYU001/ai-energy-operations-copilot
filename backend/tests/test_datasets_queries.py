@@ -1,10 +1,14 @@
 import math
+from datetime import datetime
+from decimal import Decimal
 
 from app.datasets_queries import (
     SUMMARY_NUMERIC_COLUMNS,
     get_dataset_by_id,
     get_dataset_summary,
     get_dataset_timeseries,
+    get_dataset_timeseries_for_analysis,
+    get_dataset_timeseries_for_scheduling_cost_green_ops,
     list_datasets,
 )
 from app.ingestion import ALL_ENERGY_TIMESERIES_COLUMNS
@@ -220,3 +224,51 @@ def test_get_dataset_timeseries_empty_dataset_returns_zero_and_empty_list():
 def test_timeseries_row_schema_matches_all_energy_timeseries_columns():
     schema_fields = set(TimeseriesRow.model_fields.keys()) - {"id", "dataset_id"}
     assert schema_fields == set(ALL_ENERGY_TIMESERIES_COLUMNS)
+
+
+def _decimal_row():
+    """A NUMERIC column comes back from real psycopg2 as decimal.Decimal,
+    never float -- this mixes it with every other type this row shape can
+    contain to prove _normalize_numeric_row converts only Decimal."""
+    return {
+        "timestamp": datetime(2026, 1, 1, 0, 0, 0),
+        "site_id": "site_a",
+        "electricity_price": Decimal("5.5"),
+        "grid_import_kw": Decimal("95.0"),
+        "contract_capacity_kw": Decimal("100"),
+        "battery_soc": None,
+        "battery_power_kw": 3.0,  # already float -- must pass through unchanged
+        "battery_health_status": "normal",
+        "battery_is_second_life": True,
+    }
+
+
+def test_get_dataset_timeseries_for_analysis_normalizes_decimal_to_float():
+    conn = FakeConnection(responses=[[_decimal_row()]])
+
+    rows = get_dataset_timeseries_for_analysis(conn, 1)
+
+    row = rows[0]
+    assert row["electricity_price"] == 5.5
+    assert isinstance(row["electricity_price"], float)
+    assert row["grid_import_kw"] == 95.0
+    assert isinstance(row["grid_import_kw"], float)
+    # unaffected types pass through unchanged
+    assert row["timestamp"] == datetime(2026, 1, 1, 0, 0, 0)
+    assert row["site_id"] == "site_a"
+    assert row["battery_soc"] is None
+    assert row["battery_power_kw"] == 3.0 and isinstance(row["battery_power_kw"], float)
+    assert row["battery_health_status"] == "normal"
+    assert row["battery_is_second_life"] is True
+
+
+def test_get_dataset_timeseries_for_scheduling_cost_green_ops_normalizes_decimal_to_float():
+    conn = FakeConnection(responses=[[_decimal_row()]])
+
+    rows = get_dataset_timeseries_for_scheduling_cost_green_ops(conn, 1)
+
+    row = rows[0]
+    assert row["contract_capacity_kw"] == 100.0
+    assert isinstance(row["contract_capacity_kw"], float)
+    assert row["battery_is_second_life"] is True
+    assert row["battery_soc"] is None

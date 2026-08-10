@@ -303,3 +303,157 @@ class ConversationUpdateRequest(BaseModel):
 
 class PostMessageRequest(BaseModel):
     content: str
+
+
+# ---------------------------------------------------------------------------
+# Step 13 -- Rule-Based Scheduling / Cost / Green Operations Index.
+# See docs/step13_rules_and_api_design.md for the full design (price
+# classification, scheduling precedence, interval/duration rules, Green
+# Operations Index scoring formula) that these models implement.
+# ---------------------------------------------------------------------------
+
+
+class AnalysisNote(BaseModel):
+    """Structured warning/limitation entry: type + count + a small bounded
+    sample of timestamps, instead of one raw string per occurrence -- a
+    dataset with thousands of duplicate timestamps must not blow up the
+    response payload with thousands of near-identical strings. site_id is
+    None for single-site results; multi-site dataset_aggregate results stamp
+    it in so merged notes stay traceable back to their originating site."""
+
+    type: str
+    count: int
+    sample_timestamps: list[datetime] = Field(default_factory=list)
+    site_id: Optional[str] = None
+
+
+class PriceClassificationThreshold(BaseModel):
+    """Dataset-relative low/neutral/high price classification
+    (docs/step13_rules_and_api_design.md 2.1) -- distinct from the existing
+    PriceThresholdInfo above, which only ever answers "is this high" for the
+    Step 9 anomaly rule (evaluate_battery_should_discharge_but_did_not) and
+    is left untouched."""
+
+    mode: str  # "insufficient_data" | "no_distinguishable_peak" | "discrete_tou_max" | "percentile"
+    low_threshold: Optional[float] = None
+    high_threshold: Optional[float] = None
+    non_null_sample_count: int
+    distinct_price_count: int
+    reason: Optional[str] = None
+
+
+class ScoringSignalFlag(BaseModel):
+    """One internal scoring signal occurrence, scoped to the interval it
+    applies to. Never exposed as an anomaly_type / anomaly diagnosis result
+    (docs/step13_rules_and_api_design.md 2.2) -- internal to cost estimation
+    and Green Operations Index only."""
+
+    signal: str
+    interval_start: datetime
+    interval_end: datetime
+
+
+class ScheduleRecommendation(BaseModel):
+    timestamp: Optional[datetime]
+    action: str  # "charge" | "discharge" | "idle" | "hold"
+    reason: str
+    price_classification: str  # "low" | "neutral" | "high"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ScheduleAnalysisResult(BaseModel):
+    rule: str = "battery_scheduling"
+    rule_version: str
+    price_threshold: PriceClassificationThreshold
+    input_row_count: int
+    evaluated_row_count: int
+    recommendations: list[ScheduleRecommendation]
+
+
+class CostInterval(BaseModel):
+    site_id: str
+    interval_start: datetime
+    interval_end: datetime
+    duration_hours: float
+    energy_kwh: float
+    estimated_cost: float
+    battery_arbitrage: Optional[float] = None
+
+
+class CostSiteResult(BaseModel):
+    site_id: str
+    row_count: int
+    interval_count: int
+    intervals: list[CostInterval] = Field(default_factory=list)
+    total_energy_cost: float
+    total_arbitrage_saving: float
+    over_contract_penalty_flags: list[ScoringSignalFlag] = Field(default_factory=list)
+    warnings: list[AnalysisNote] = Field(default_factory=list)
+    limitations: list[AnalysisNote] = Field(default_factory=list)
+
+
+class CostAnalysisResult(BaseModel):
+    rule: str = "cost_estimation"
+    rule_version: str
+    # The actual parameter used to produce this result (Step 13 Sub-step
+    # 13.3 decision, 2026-08-06) -- callers must be able to see this without
+    # parsing the persistence-layer rule_version's canonical suffix.
+    max_expected_interval_hours: float
+    site_count: int
+    per_site: list[CostSiteResult]
+    dataset_aggregate: CostSiteResult
+
+
+class GreenOpsComponentScore(BaseModel):
+    component: str  # "pv_utilization" | "battery_operation" | "grid_dependency" | "battery_health"
+    max_score: float
+    score: Optional[float] = None
+    status: str  # "computed" | "insufficient_data"
+    eligible_duration_hours: Optional[float] = None
+    flagged_duration_hours: Optional[float] = None
+    penalty_reasons: list[str] = Field(default_factory=list)
+
+
+class GreenOpsSiteResult(BaseModel):
+    site_id: str
+    components: list[GreenOpsComponentScore]
+    second_life_bonus: Optional[float] = None
+    total_score: Optional[float] = None
+    warnings: list[AnalysisNote] = Field(default_factory=list)
+
+
+class GreenOpsAnalysisResult(BaseModel):
+    rule: str = "green_operations_index"
+    rule_version: str
+    # Same reproducibility rationale as CostAnalysisResult above.
+    max_expected_interval_hours: float
+    site_count: int
+    per_site: list[GreenOpsSiteResult]
+    dataset_aggregate: GreenOpsSiteResult
+
+
+class ScheduleRunResponse(BaseModel):
+    analysis_run_id: int
+    dataset_id: int
+    analysis_type: str
+    rule_version: str
+    created_at: datetime
+    result: ScheduleAnalysisResult
+
+
+class CostRunResponse(BaseModel):
+    analysis_run_id: int
+    dataset_id: int
+    analysis_type: str
+    rule_version: str
+    created_at: datetime
+    result: CostAnalysisResult
+
+
+class GreenOpsRunResponse(BaseModel):
+    analysis_run_id: int
+    dataset_id: int
+    analysis_type: str
+    rule_version: str
+    created_at: datetime
+    result: GreenOpsAnalysisResult

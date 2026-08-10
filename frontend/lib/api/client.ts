@@ -1,6 +1,7 @@
 import "server-only";
 
 import type {
+  AnalysisNote,
   AnalysisRunResponse,
   AnomalyResult,
   BatteryDischargeAnalysisResult,
@@ -15,13 +16,24 @@ import type {
   ConversationDetail,
   ConversationSummary,
   ConversationsPage,
+  CostAnalysisResult,
+  CostInterval,
+  CostRunResponse,
+  CostSiteResult,
   DatasetSummary,
   DatasetSummaryStatistics,
   DocumentSummary,
   DocumentUploadResult,
+  GreenOpsAnalysisResult,
+  GreenOpsComponentName,
+  GreenOpsComponentScore,
+  GreenOpsComponentStatus,
+  GreenOpsRunResponse,
+  GreenOpsSiteResult,
   HealthResponse,
   PriceThresholdInfo,
   RoleMode,
+  ScoringSignalFlag,
   TimeseriesPage,
   TimeseriesRow,
   VersionResponse,
@@ -359,6 +371,251 @@ export async function postDatasetAnalysis(
   if (!isAnalysisRunResponse(data)) {
     throw new Error(
       `API response schema mismatch: /datasets/${datasetId}/analysis (POST) did not return AnalysisRunResponse`,
+    );
+  }
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Step 13 -- Cost Estimation (Sub-step 13.5)
+// ---------------------------------------------------------------------------
+
+function isAnalysisNote(value: unknown): value is AnalysisNote {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.type === "string" &&
+    typeof v.count === "number" &&
+    Array.isArray(v.sample_timestamps) &&
+    v.sample_timestamps.every((t) => typeof t === "string") &&
+    isNullableString(v.site_id)
+  );
+}
+
+function isScoringSignalFlag(value: unknown): value is ScoringSignalFlag {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.signal === "string" &&
+    typeof v.interval_start === "string" &&
+    typeof v.interval_end === "string"
+  );
+}
+
+function isCostInterval(value: unknown): value is CostInterval {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.site_id === "string" &&
+    typeof v.interval_start === "string" &&
+    typeof v.interval_end === "string" &&
+    typeof v.duration_hours === "number" &&
+    typeof v.energy_kwh === "number" &&
+    typeof v.estimated_cost === "number" &&
+    (v.battery_arbitrage === null || typeof v.battery_arbitrage === "number")
+  );
+}
+
+function isCostSiteResult(value: unknown): value is CostSiteResult {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.site_id === "string" &&
+    typeof v.row_count === "number" &&
+    typeof v.interval_count === "number" &&
+    Array.isArray(v.intervals) &&
+    v.intervals.every(isCostInterval) &&
+    typeof v.total_energy_cost === "number" &&
+    typeof v.total_arbitrage_saving === "number" &&
+    Array.isArray(v.over_contract_penalty_flags) &&
+    v.over_contract_penalty_flags.every(isScoringSignalFlag) &&
+    Array.isArray(v.warnings) &&
+    v.warnings.every(isAnalysisNote) &&
+    Array.isArray(v.limitations) &&
+    v.limitations.every(isAnalysisNote)
+  );
+}
+
+function isCostAnalysisResult(value: unknown): value is CostAnalysisResult {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.rule === "string" &&
+    typeof v.rule_version === "string" &&
+    typeof v.max_expected_interval_hours === "number" &&
+    typeof v.site_count === "number" &&
+    Array.isArray(v.per_site) &&
+    v.per_site.every(isCostSiteResult) &&
+    isCostSiteResult(v.dataset_aggregate)
+  );
+}
+
+function isCostRunResponse(value: unknown): value is CostRunResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.analysis_run_id === "number" &&
+    typeof v.dataset_id === "number" &&
+    typeof v.analysis_type === "string" &&
+    typeof v.rule_version === "string" &&
+    typeof v.created_at === "string" &&
+    isCostAnalysisResult(v.result)
+  );
+}
+
+export async function getDatasetCost(
+  datasetId: number,
+  maxExpectedIntervalHours: number,
+): Promise<CostRunResponse> {
+  const data = await apiFetch(
+    `/datasets/${datasetId}/cost?max_expected_interval_hours=${encodeURIComponent(String(maxExpectedIntervalHours))}`,
+  );
+  if (!isCostRunResponse(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/cost did not return CostRunResponse`,
+    );
+  }
+  return data;
+}
+
+export async function postDatasetCost(
+  datasetId: number,
+  maxExpectedIntervalHours: number,
+): Promise<CostRunResponse> {
+  const data = await apiFetch(
+    `/datasets/${datasetId}/cost?max_expected_interval_hours=${encodeURIComponent(String(maxExpectedIntervalHours))}`,
+    { method: "POST" },
+  );
+  if (!isCostRunResponse(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/cost (POST) did not return CostRunResponse`,
+    );
+  }
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Step 13 -- Green Operations Index (Sub-step 13.6)
+// ---------------------------------------------------------------------------
+
+const GREEN_OPS_COMPONENT_NAMES: readonly GreenOpsComponentName[] = [
+  "pv_utilization",
+  "battery_operation",
+  "grid_dependency",
+  "battery_health",
+];
+
+function isGreenOpsComponentName(value: unknown): value is GreenOpsComponentName {
+  return (
+    typeof value === "string" &&
+    (GREEN_OPS_COMPONENT_NAMES as readonly string[]).includes(value)
+  );
+}
+
+function isGreenOpsComponentStatus(value: unknown): value is GreenOpsComponentStatus {
+  return value === "computed" || value === "insufficient_data";
+}
+
+function isGreenOpsComponentScore(value: unknown): value is GreenOpsComponentScore {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+
+  if (!isGreenOpsComponentName(v.component)) return false;
+  if (typeof v.max_score !== "number") return false;
+  if (!isGreenOpsComponentStatus(v.status)) return false;
+  if (!Array.isArray(v.penalty_reasons)) return false;
+  if (!v.penalty_reasons.every((r) => typeof r === "string")) return false;
+
+  const nullableNumberFields = [v.score, v.eligible_duration_hours, v.flagged_duration_hours];
+  if (!nullableNumberFields.every((f) => f === null || typeof f === "number")) {
+    return false;
+  }
+
+  // status <-> score null-consistency. Per backend _score_component /
+  // _aggregate_component: score === null is the ONLY reliable invariant of
+  // "insufficient_data" -- eligible/flagged duration hours may independently
+  // be null (zero valid intervals at all, _evaluate_site's `if not intervals`
+  // branch) OR a real float such as 0.0 (intervals exist but none eligible,
+  // or an aggregate mixing computed and insufficient per-site components).
+  // "computed" guarantees all three are non-null.
+  if (v.status === "insufficient_data" && v.score !== null) return false;
+  if (
+    v.status === "computed" &&
+    (v.score === null || v.eligible_duration_hours === null || v.flagged_duration_hours === null)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function isGreenOpsSiteResult(value: unknown): value is GreenOpsSiteResult {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.site_id === "string" &&
+    Array.isArray(v.components) &&
+    v.components.every(isGreenOpsComponentScore) &&
+    (v.second_life_bonus === null || typeof v.second_life_bonus === "number") &&
+    (v.total_score === null || typeof v.total_score === "number") &&
+    Array.isArray(v.warnings) &&
+    v.warnings.every(isAnalysisNote)
+  );
+}
+
+function isGreenOpsAnalysisResult(value: unknown): value is GreenOpsAnalysisResult {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.rule === "string" &&
+    typeof v.rule_version === "string" &&
+    typeof v.max_expected_interval_hours === "number" &&
+    typeof v.site_count === "number" &&
+    Array.isArray(v.per_site) &&
+    v.per_site.every(isGreenOpsSiteResult) &&
+    isGreenOpsSiteResult(v.dataset_aggregate)
+  );
+}
+
+function isGreenOpsRunResponse(value: unknown): value is GreenOpsRunResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.analysis_run_id === "number" &&
+    typeof v.dataset_id === "number" &&
+    typeof v.analysis_type === "string" &&
+    typeof v.rule_version === "string" &&
+    typeof v.created_at === "string" &&
+    isGreenOpsAnalysisResult(v.result)
+  );
+}
+
+export async function getDatasetGreenOperationsIndex(
+  datasetId: number,
+  maxExpectedIntervalHours: number,
+): Promise<GreenOpsRunResponse> {
+  const data = await apiFetch(
+    `/datasets/${datasetId}/green-operations-index?max_expected_interval_hours=${encodeURIComponent(String(maxExpectedIntervalHours))}`,
+  );
+  if (!isGreenOpsRunResponse(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/green-operations-index did not return GreenOpsRunResponse`,
+    );
+  }
+  return data;
+}
+
+export async function postDatasetGreenOperationsIndex(
+  datasetId: number,
+  maxExpectedIntervalHours: number,
+): Promise<GreenOpsRunResponse> {
+  const data = await apiFetch(
+    `/datasets/${datasetId}/green-operations-index?max_expected_interval_hours=${encodeURIComponent(String(maxExpectedIntervalHours))}`,
+    { method: "POST" },
+  );
+  if (!isGreenOpsRunResponse(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/green-operations-index (POST) did not return GreenOpsRunResponse`,
     );
   }
   return data;
