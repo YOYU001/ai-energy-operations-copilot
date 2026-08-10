@@ -156,3 +156,40 @@ def test_multi_site_aggregate_is_duration_weighted():
     # equal 10h weight each -> simple average of 0.0 and 20.0
     assert aggregate_grid.score == 10.0
     assert result.dataset_aggregate.site_id == "__all__"
+
+
+def test_dataset_level_price_threshold_used_across_sites():
+    # site_a's own price range (1-6) alone would classify 6.0 as locally
+    # "high" (75th percentile of [1,2,3,4,6,6] is 5.5); combined with
+    # site_b's much larger range (101-106), the correct dataset-level
+    # threshold (docs/step13_rules_and_api_design.md 2.1) has a 75th
+    # percentile around 103.25, so 6.0 must classify as "neutral" instead.
+    # A charging event (battery_power_kw < 0) at that price must therefore
+    # NOT be flagged as peak_period_abnormal_charging.
+    site_a_rows = [_row(h, site_id="site_a") for h in range(6)]
+    site_a_rows[4] = _row(4, site_id="site_a", electricity_price=6.0, battery_power_kw=-5.0)
+    site_b_rows = [_row(h, site_id="site_b", electricity_price=float(h + 101)) for h in range(6)]
+
+    result = evaluate_green_operations_index(site_a_rows + site_b_rows, MAX_GAP_HOURS)
+
+    battery_op_a = _get_component(next(s for s in result.per_site if s.site_id == "site_a"), "battery_operation")
+    assert "peak_period_abnormal_charging" not in battery_op_a.penalty_reasons
+
+
+def test_aggregate_second_life_bonus_is_none_when_any_site_unknown():
+    # site_a: fully confirmed safe second-life data -> bonus 10.0.
+    # site_b: incomplete second-life data, nothing confirmed unsafe -> bonus
+    # None. The aggregate must not silently average over only site_a's
+    # known bonus -- it must report None too, per _sum_total_score's
+    # all-non-null-required contract.
+    site_a_rows = [_row(h, site_id="site_a", battery_is_second_life=True) for h in range(6)]
+    site_b_rows = [_row(h, site_id="site_b", battery_is_second_life=True) for h in range(6)]
+    site_b_rows[4] = _row(4, site_id="site_b", battery_is_second_life=True, battery_health_status=None)
+
+    result = evaluate_green_operations_index(site_a_rows + site_b_rows, MAX_GAP_HOURS)
+
+    site_a = next(s for s in result.per_site if s.site_id == "site_a")
+    site_b = next(s for s in result.per_site if s.site_id == "site_b")
+    assert site_a.second_life_bonus == 10.0
+    assert site_b.second_life_bonus is None
+    assert result.dataset_aggregate.second_life_bonus is None

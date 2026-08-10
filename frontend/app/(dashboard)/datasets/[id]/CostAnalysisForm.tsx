@@ -3,7 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState, useTransition } from "react";
 
-import { runCostAnalysis } from "./actions";
+import { runCostAnalysis } from "@/app/(dashboard)/datasets/[id]/actions";
 
 const PARAM_NAME = "max_expected_interval_hours";
 

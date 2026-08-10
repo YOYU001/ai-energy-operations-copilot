@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 
-import CostAnalysisForm from "./CostAnalysisForm";
-import GreenOpsAnalysisForm from "./GreenOpsAnalysisForm";
+import CostAnalysisForm from "@/app/(dashboard)/datasets/[id]/CostAnalysisForm";
+import GreenOpsAnalysisForm from "@/app/(dashboard)/datasets/[id]/GreenOpsAnalysisForm";
 import ChartSection from "@/components/charts/ChartSection";
 import {
   CostAggregateSummary,
@@ -204,7 +204,7 @@ export default async function DatasetChartsPage({
               <p className="text-sm font-medium">
                 {site.site_id}：
                 {site.total_score === null
-                  ? "Insufficient data"
+                  ? "資料不足"
                   : `${site.total_score.toLocaleString("zh-Hant", { maximumFractionDigits: 2 })} / 100`}
               </p>
               {site.warnings.length > 0 && (

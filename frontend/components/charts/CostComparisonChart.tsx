@@ -63,7 +63,7 @@ function CostTooltip({
       <p className="font-medium">{datum.site_id}</p>
       <p>
         {datum.insufficient
-          ? "Insufficient data"
+          ? "資料不足"
           : `成本：${formatCost(datum.total_energy_cost as number)}`}
       </p>
       <p>有效區間數：{datum.interval_count}</p>
@@ -85,7 +85,7 @@ export function CostComparisonBarChart({
   const summaryText = data
     .map((d) =>
       d.insufficient
-        ? `${d.site_id}：Insufficient data`
+        ? `${d.site_id}：資料不足`
         : `${d.site_id}：${formatCost(d.total_energy_cost as number)}（成本單位，依原始 electricity_price 尺度）`,
     )
     .join("；");
@@ -129,7 +129,7 @@ export function CostComparisonBarChart({
         <ul className="mt-2 text-xs text-foreground/60">
           {insufficientSites.map((d) => (
             <li key={d.site_id}>
-              {d.site_id}：Insufficient data（沒有可計算成本的有效時間區間）
+              {d.site_id}：資料不足（沒有可計算成本的有效時間區間）
             </li>
           ))}
         </ul>
@@ -149,13 +149,13 @@ export function CostAggregateSummary({
 
   return (
     <div className="mt-4 rounded-lg border border-black/10 p-4 text-sm dark:border-white/10">
-      <p className="font-medium">Dataset Aggregate</p>
+      <p className="font-medium">資料集彙總</p>
       <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
         <div>
           <dt className="text-foreground/60">總成本</dt>
           <dd>
             {insufficient
-              ? "Insufficient data"
+              ? "資料不足"
               : formatCost(aggregate.total_energy_cost)}
           </dd>
         </div>
@@ -163,7 +163,7 @@ export function CostAggregateSummary({
           <dt className="text-foreground/60">電池套利淨額</dt>
           <dd>
             {insufficient
-              ? "Insufficient data"
+              ? "資料不足"
               : formatCost(aggregate.total_arbitrage_saving)}
           </dd>
         </div>

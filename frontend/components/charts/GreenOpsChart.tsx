@@ -92,7 +92,7 @@ function GreenOpsTooltip({
       <p className="font-medium">{datum.label}</p>
       <p>
         {datum.insufficient
-          ? "Insufficient data"
+          ? "資料不足"
           : `分數：${formatScore(datum.raw_score as number)} / ${formatScore(datum.max_score)}（${formatScore(datum.percentage as number)}%）`}
       </p>
     </div>
@@ -112,7 +112,7 @@ export function GreenOpsScoreBarChart({
   const summaryText = data
     .map((d) =>
       d.insufficient
-        ? `${d.label}：Insufficient data`
+        ? `${d.label}：資料不足`
         : `${d.label}：${formatScore(d.raw_score as number)} / ${formatScore(d.max_score)}`,
     )
     .join("；");
@@ -156,7 +156,7 @@ export function GreenOpsScoreBarChart({
         <ul className="mt-2 text-xs text-foreground/60">
           {insufficientComponents.map((d) => (
             <li key={d.component}>
-              {d.label}：Insufficient data（資料不足以計算此分項）
+              {d.label}：資料不足以計算此分項
             </li>
           ))}
         </ul>
@@ -177,7 +177,7 @@ export function GreenOpsComponentGrid({
           <dt className="text-foreground/60">{COMPONENT_LABELS[c.component]}</dt>
           <dd>
             {c.status === "insufficient_data"
-              ? "Insufficient data"
+              ? "資料不足"
               : `${formatScore(c.score as number)} / ${formatScore(c.max_score)}`}
           </dd>
           {c.penalty_reasons.length > 0 && (
@@ -200,13 +200,13 @@ export function GreenOpsAggregateSummary({
 }) {
   return (
     <div className="mt-4 rounded-lg border border-black/10 p-4 text-sm dark:border-white/10">
-      <p className="font-medium">Dataset Aggregate</p>
+      <p className="font-medium">資料集彙總</p>
       <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
         <div>
           <dt className="text-foreground/60">總分</dt>
           <dd>
             {aggregate.total_score === null
-              ? "Insufficient data"
+              ? "資料不足"
               : `${formatScore(aggregate.total_score)} / 100`}
           </dd>
         </div>
@@ -214,7 +214,7 @@ export function GreenOpsAggregateSummary({
           <dt className="text-foreground/60">Second-life 加分</dt>
           <dd>
             {aggregate.second_life_bonus === null
-              ? "Insufficient data"
+              ? "資料不足"
               : formatScore(aggregate.second_life_bonus)}
           </dd>
         </div>

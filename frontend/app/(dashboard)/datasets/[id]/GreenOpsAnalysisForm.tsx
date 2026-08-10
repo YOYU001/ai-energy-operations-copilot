@@ -3,7 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState, useTransition } from "react";
 
-import { runGreenOpsAnalysis } from "./actions";
+import { runGreenOpsAnalysis } from "@/app/(dashboard)/datasets/[id]/actions";
 
 const PARAM_NAME = "green_ops_max_expected_interval_hours";
 

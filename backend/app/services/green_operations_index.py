@@ -3,7 +3,13 @@ from typing import Optional
 
 import pandas as pd
 
-from app.schemas import AnalysisNote, GreenOpsAnalysisResult, GreenOpsComponentScore, GreenOpsSiteResult
+from app.schemas import (
+    AnalysisNote,
+    GreenOpsAnalysisResult,
+    GreenOpsComponentScore,
+    GreenOpsSiteResult,
+    PriceClassificationThreshold,
+)
 from app.services.cost_intervals import compute_valid_intervals
 from app.services.price_classification import compute_price_threshold
 from app.services.scoring_signals import (
@@ -43,13 +49,25 @@ _BSD_ELIGIBILITY_COLUMNS = (
 def evaluate_green_operations_index(rows: list[dict], max_expected_interval_hours: float) -> GreenOpsAnalysisResult:
     """Evaluate docs/MVP1_RULES.md 7 (Green Operations Index) for one
     dataset, per docs/step13_rules_and_api_design.md 5. Pure function, no
-    DB access. Groups by site_id first, same as cost_estimation.py."""
+    DB access. Groups by site_id first, same as cost_estimation.py.
+
+    Price threshold (docs/step13_rules_and_api_design.md 2.1) is computed
+    ONCE across every row in the dataset -- not per site -- so
+    peak_period_abnormal_charging classifies "high price" identically for
+    every site, regardless of that site's own local price distribution."""
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         grouped[row.get("site_id") or ""].append(row)
 
+    all_rows_df = pd.DataFrame(rows) if rows else pd.DataFrame()
+    dataset_price_threshold = (
+        compute_price_threshold(all_rows_df["electricity_price"])
+        if "electricity_price" in all_rows_df.columns
+        else compute_price_threshold(pd.Series([], dtype=float))
+    )
+
     per_site = [
-        _evaluate_site(site_id, site_rows, max_expected_interval_hours)
+        _evaluate_site(site_id, site_rows, max_expected_interval_hours, dataset_price_threshold)
         for site_id, site_rows in grouped.items()
     ]
 
@@ -62,7 +80,12 @@ def evaluate_green_operations_index(rows: list[dict], max_expected_interval_hour
     )
 
 
-def _evaluate_site(site_id: str, site_rows: list[dict], max_expected_interval_hours: float) -> GreenOpsSiteResult:
+def _evaluate_site(
+    site_id: str,
+    site_rows: list[dict],
+    max_expected_interval_hours: float,
+    price_threshold: PriceClassificationThreshold,
+) -> GreenOpsSiteResult:
     intervals, notes = compute_valid_intervals(site_rows, max_expected_interval_hours)
     warnings = [n for n in notes if n.type != "last_row_excluded"]
 
@@ -78,12 +101,6 @@ def _evaluate_site(site_id: str, site_rows: list[dict], max_expected_interval_ho
     start_rows = [interval.start_row for interval in intervals]
     df = pd.DataFrame(start_rows)
     durations = pd.Series([interval.duration_hours for interval in intervals], index=df.index)
-
-    price_threshold = (
-        compute_price_threshold(df["electricity_price"])
-        if "electricity_price" in df.columns
-        else compute_price_threshold(pd.Series([], dtype=float))
-    )
 
     pv_signals = [("green_energy_waste", evaluate_green_energy_waste_mask(df))]
     battery_operation_signals = [
@@ -306,7 +323,14 @@ def _aggregate_component(name: str, max_score: float, per_site: list[GreenOpsSit
 
 
 def _aggregate_second_life_bonus(per_site: list[GreenOpsSiteResult]) -> Optional[float]:
-    known = [site.second_life_bonus for site in per_site if site.second_life_bonus is not None]
-    if not known:
+    """Same all-non-null-required rule as _sum_total_score -- if ANY
+    participating site's second-life bonus is unavailable (None), the
+    aggregate must not silently average over only the known sites, which
+    would present an unverified dataset-wide bonus. Only when every site's
+    bonus is known can the aggregate be computed."""
+    if not per_site:
         return None
-    return 10.0 if all(bonus == 10.0 for bonus in known) else 0.0
+    bonuses = [site.second_life_bonus for site in per_site]
+    if any(bonus is None for bonus in bonuses):
+        return None
+    return 10.0 if all(bonus == 10.0 for bonus in bonuses) else 0.0
