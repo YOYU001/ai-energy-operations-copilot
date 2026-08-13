@@ -159,6 +159,8 @@ Step 13（原 Step 12）: Analysis Report
 
 完整版本見 `docs/DEVELOPMENT_WORKFLOW.md` 第 6 節（已同步更新）。
 
+> 2026-08-13 更新：Step 12 結案後盤點發現上方「Step 13（原 Step 12）: Analysis Report」少列了 battery scheduling suggestion／cost estimation／green operations index 三項（原規劃於 Step 9，實際未實作）。這三項已補做為 Step 13.2–13.6（backend rules、API、Dashboard），已完成並 merge 進 main（PR #53，commit 8d6672a）。Step 13.7 以 synthetic fixtures 完成端對端驗證，結論為 `synthetic validation complete`（非 `real-world validation`；real-world EMS/BMS validation is out of scope for MVP1），詳見 docs/step13_7_synthetic_validation_report.md。原本的「Step 13: Analysis Report」順延為獨立的下一個 Step。MVP1 尚缺：Battery Scheduling frontend UI（目前僅 `API-level synthetic validation`）、role mode selector frontend UI、Analysis Report 三項。
+
 ---
 
 ## 10. 下一個最小步驟
