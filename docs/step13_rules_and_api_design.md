@@ -543,4 +543,4 @@ class GreenOpsRunResponse(BaseModel):
 | 13.4 | Tests：pure-function + API-level（比照 `test_rule_engine.py`／`test_analysis_endpoint.py` 慣例） | duplicate timestamp／non-positive interval／large gap／insufficient_data 各自至少一個測試 |
 | 13.5 | Dashboard：Cost comparison 圖表 | 對一個真實 dataset 顯示 per-site 或 aggregate 成本趨勢 |
 | 13.6 | Dashboard：Green Operations Index 圖表 | 顯示 4 個 component + total，null component 時明確顯示「資料不足」而非 0 分 |
-| 13.7 | Integration verification | 端到端對真實 dataset 跑三個新 endpoint，確認 `analysis_runs` 正確寫入、無 regression |
+| 13.7 | Integration verification | 端到端對 synthetic dataset（`scripts/synthetic_step13/`）跑三個新 endpoint，確認 `analysis_runs` 正確寫入、無 regression。結論為 `synthetic validation complete`，非 `real-world validation`；real-world EMS/BMS validation is out of scope for MVP1。詳見 docs/step13_7_synthetic_validation_report.md。 |
