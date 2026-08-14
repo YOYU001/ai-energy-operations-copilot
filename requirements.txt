@@ -13,7 +13,7 @@ httpx2==2.9.1
 # to PyTorch's own CPU index). This makes `pip install -r requirements.txt`
 # work as a single command in a fresh environment, with no manual step.
 --extra-index-url https://download.pytorch.org/whl/cpu
-pymupdf==1.28.0
+pymupdf==1.28.2
 torch==2.13.0+cpu
 easyocr==1.7.2
 
