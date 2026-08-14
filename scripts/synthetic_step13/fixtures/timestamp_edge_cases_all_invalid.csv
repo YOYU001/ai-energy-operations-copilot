@@ -1,0 +1,11 @@
+timestamp,site_id,pv_forecast_kw,pv_actual_kw,load_kw,load_forecast_kw,battery_soc,battery_power_kw,battery_temperature,electricity_price,contract_capacity_kw,grid_import_kw,grid_export_kw,weather_condition,ghi,temperature,humidity,ems_mode,equipment_status,battery_soh,battery_cycle_count,battery_equivalent_cycle,battery_health_status,battery_is_second_life,battery_rated_capacity_kwh,battery_available_capacity_kwh
+invalid-timestamp-0,site_tsedge02,0.0,0.0,19.77,19.05,50.0,-20.0,30.3,2.93,100.0,39.77,0.0,cloudy,0.0,22.3,60.1,auto,normal,93.01,120,118.0,normal,False,50.0,45.0
+invalid-timestamp-1,site_tsedge02,0.0,0.0,22.3,22.86,60.0,-20.0,30.0,3.23,100.0,42.3,0.0,cloudy,0.0,22.1,59.2,auto,normal,92.83,120,118.01,normal,False,50.0,45.0
+invalid-timestamp-2,site_tsedge02,0.0,0.0,22.86,22.49,70.0,-20.0,30.4,2.94,100.0,42.86,0.0,cloudy,0.0,21.8,48.1,auto,normal,92.52,120,118.02,normal,False,50.0,45.0
+invalid-timestamp-3,site_tsedge02,0.0,0.0,17.84,17.57,80.0,0.0,24.8,3.22,100.0,17.84,0.0,cloudy,0.0,22.4,50.0,auto,normal,93.18,120,118.03,normal,False,50.0,45.0
+invalid-timestamp-4,site_tsedge02,0.0,0.0,23.04,22.68,80.0,0.0,25.4,2.9,100.0,23.04,0.0,cloudy,0.0,22.1,58.4,auto,normal,92.55,120,118.04,normal,False,50.0,45.0
+invalid-timestamp-5,site_tsedge02,0.0,0.0,18.07,17.6,80.0,0.0,25.4,3.08,100.0,18.07,0.0,cloudy,0.0,22.5,58.7,auto,normal,92.54,120,118.05,normal,False,50.0,45.0
+invalid-timestamp-6,site_tsedge02,0.0,0.0,19.38,20.24,80.0,0.0,24.4,3.21,100.0,19.38,0.0,cloudy,0.0,22.5,56.8,auto,normal,92.76,120,118.06,normal,False,50.0,45.0
+invalid-timestamp-7,site_tsedge02,0.0,0.0,20.34,21.24,80.0,0.0,24.4,2.77,100.0,20.34,0.0,cloudy,0.0,22.2,58.3,auto,normal,92.58,120,118.07,normal,False,50.0,45.0
+invalid-timestamp-8,site_tsedge02,0.0,0.0,20.65,21.54,80.0,0.0,24.1,2.8,100.0,20.65,0.0,cloudy,0.0,22.0,63.5,auto,normal,93.23,120,118.08,normal,False,50.0,45.0
+invalid-timestamp-9,site_tsedge02,0.0,0.0,20.33,20.78,80.0,0.0,24.0,3.14,100.0,20.33,0.0,cloudy,0.0,22.5,46.4,auto,normal,92.51,120,118.09,normal,False,50.0,45.0
