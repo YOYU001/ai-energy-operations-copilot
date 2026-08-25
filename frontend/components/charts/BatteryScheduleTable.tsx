@@ -93,6 +93,7 @@ export default function BatteryScheduleTable({
         <button
           type="button"
           onClick={() => setExpanded(true)}
+          aria-expanded={expanded}
           className="mt-2 rounded-md border border-black/10 px-3 py-1 text-xs hover:bg-foreground/5 dark:border-white/10"
         >
           展開其餘 {hiddenCount} 筆
@@ -102,6 +103,7 @@ export default function BatteryScheduleTable({
         <button
           type="button"
           onClick={() => setExpanded(false)}
+          aria-expanded={expanded}
           className="mt-2 rounded-md border border-black/10 px-3 py-1 text-xs hover:bg-foreground/5 dark:border-white/10"
         >
           收合

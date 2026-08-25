@@ -50,18 +50,24 @@ function isValidNumber(value: unknown): value is number {
 // query, but that positional coupling is never trusted blindly -- every
 // point is re-verified by comparing timestamps before it is allowed onto
 // the chart.
+//
+// alignedCount is deliberately defined as points.length (rows that actually
+// produced a marker), not merely "timestamp matched" -- a row can match on
+// timestamp but still have a null/invalid battery_power_kw and therefore
+// never reach `points`. Counting it as "aligned" anyway would let the
+// "已疊加 N 筆" caption overstate what's actually drawn on the chart.
+// failedCount is the complement (data.length - points.length), so every row
+// is accounted for exactly once between the two counts.
 export function alignRecommendations(
   data: TimeSeriesDatum[],
   recommendations: ScheduleRecommendation[],
 ): { points: ScheduleActionPoint[]; alignedCount: number; failedCount: number } {
   const points: ScheduleActionPoint[] = [];
-  let failedCount = 0;
 
   for (let i = 0; i < data.length; i++) {
     const rec = recommendations[i];
     const datum = data[i];
     if (rec === undefined || rec.timestamp !== datum.timestamp) {
-      failedCount += 1;
       continue;
     }
     const value = datum.battery_power_kw;
@@ -70,7 +76,7 @@ export function alignRecommendations(
     }
   }
 
-  return { points, alignedCount: data.length - failedCount, failedCount };
+  return { points, alignedCount: points.length, failedCount: data.length - points.length };
 }
 
 function formatAxisTick(iso: string | null): string {
@@ -86,6 +92,14 @@ function formatTooltipLabel(iso: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleString("zh-Hant");
+}
+
+// Matches TimeSeriesChart's Tooltip formatter (unit-suffixed value, name
+// passed through) so the overlay chart's tooltip keeps the same clean,
+// single-row-per-series look as the plain chart it replaces.
+function formatTooltipValue(value: unknown, name: unknown): [string, string] {
+  if (!isValidNumber(value)) return [String(value), String(name)];
+  return [`${value} kW`, String(name)];
 }
 
 function shapePath(shape: ActionShape, cx: number, cy: number, size: number) {
@@ -169,6 +183,7 @@ export default function BatteryScheduleOverlay({
                 labelFormatter={(label: unknown) =>
                   formatTooltipLabel(typeof label === "string" ? label : null)
                 }
+                formatter={formatTooltipValue}
               />
               <ReferenceLine
                 y={0}
@@ -197,7 +212,7 @@ export default function BatteryScheduleOverlay({
           </ResponsiveContainer>
         </div>
         <p className="mt-2 text-xs text-foreground/60">
-          此資料集的排程建議與圖表時間序列的 timestamp 全數對齊失敗，無法在圖上標示建議動作；下方明細表仍可查看完整的排程建議內容。
+          此資料集的排程建議無法與圖表時間序列對齊（timestamp 不符或缺少有效的 battery_power_kw 數值），無法在圖上標示建議動作；下方明細表仍可查看完整的排程建議內容。
         </p>
       </div>
     );
@@ -224,6 +239,7 @@ export default function BatteryScheduleOverlay({
               labelFormatter={(label: unknown) =>
                 formatTooltipLabel(typeof label === "string" ? label : null)
               }
+              formatter={formatTooltipValue}
             />
             <ReferenceLine
               y={0}
@@ -254,6 +270,7 @@ export default function BatteryScheduleOverlay({
               shape={renderActionMarker}
               isAnimationActive={false}
               legendType="none"
+              tooltipType="none"
             />
           </ComposedChart>
         </ResponsiveContainer>
@@ -276,7 +293,7 @@ export default function BatteryScheduleOverlay({
           ? `圖表僅疊加前 ${data.length} 筆資料的排程建議標記（資料集共 ${totalRecommendations} 筆建議，完整內容請見下方明細表）。`
           : `已疊加 ${alignedCount} 筆資料點的排程建議標記。`}
         {failedCount > 0 &&
-          ` 另有 ${failedCount} 筆因 timestamp 對齊失敗未顯示標記。`}
+          ` 另有 ${failedCount} 筆因 timestamp 未對齊或缺少有效數值未顯示標記。`}
       </p>
     </div>
   );
