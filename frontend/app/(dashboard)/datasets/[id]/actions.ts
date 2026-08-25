@@ -4,8 +4,34 @@ import {
   ApiError,
   postDatasetCost,
   postDatasetGreenOperationsIndex,
+  postDatasetSchedule,
 } from "@/lib/api/client";
-import type { CostRunResponse, GreenOpsRunResponse } from "@/lib/api/types";
+import type {
+  CostRunResponse,
+  GreenOpsRunResponse,
+  ScheduleRunResponse,
+} from "@/lib/api/types";
+
+export type RunScheduleAnalysisResult =
+  | { ok: true; result: ScheduleRunResponse }
+  | { ok: false; status: number | null };
+
+export async function runScheduleAnalysis(
+  datasetId: number,
+): Promise<RunScheduleAnalysisResult> {
+  // No URL navigation needed after success (unlike Cost/Green Ops) -- the
+  // schedule endpoint takes no parameter, so RunScheduleButton just calls
+  // router.refresh() itself once this action resolves ok.
+  try {
+    const result = await postDatasetSchedule(datasetId);
+    return { ok: true, result };
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return { ok: false, status: error.status };
+    }
+    return { ok: false, status: null };
+  }
+}
 
 export type RunCostAnalysisResult =
   | { ok: true; result: CostRunResponse }

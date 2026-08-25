@@ -218,6 +218,52 @@ export interface GreenOpsRunResponse {
   result: GreenOpsAnalysisResult;
 }
 
+// Step 13 -- Battery Scheduling (Sub-step 13.4). Mirrors backend/app/schemas.py.
+// Unlike CostAnalysisResult / GreenOpsAnalysisResult, this API takes no
+// max_expected_interval_hours parameter and has no per-site breakdown --
+// recommendations is a flat list spanning the whole dataset regardless of
+// site_id (see backend/app/services/battery_scheduling.py).
+
+// Mirrors backend's PriceClassificationThreshold -- deliberately distinct
+// from PriceThresholdInfo above (that one backs the Step 9 anomaly rule and
+// only ever answers "is this high"; this one carries a separate
+// low/high pair for the low/neutral/high classification Battery Scheduling
+// uses).
+export interface PriceClassificationThreshold {
+  mode: string; // "insufficient_data" | "no_distinguishable_peak" | "discrete_tou_max" | "percentile"
+  low_threshold: number | null;
+  high_threshold: number | null;
+  non_null_sample_count: number;
+  distinct_price_count: number;
+  reason: string | null;
+}
+
+export interface ScheduleRecommendation {
+  timestamp: string | null;
+  action: string; // "charge" | "discharge" | "idle" | "hold"
+  reason: string;
+  price_classification: string; // "low" | "neutral" | "high"
+  warnings: string[];
+}
+
+export interface ScheduleAnalysisResult {
+  rule: string;
+  rule_version: string;
+  price_threshold: PriceClassificationThreshold;
+  input_row_count: number;
+  evaluated_row_count: number;
+  recommendations: ScheduleRecommendation[];
+}
+
+export interface ScheduleRunResponse {
+  analysis_run_id: number;
+  dataset_id: number;
+  analysis_type: string;
+  rule_version: string;
+  created_at: string;
+  result: ScheduleAnalysisResult;
+}
+
 export interface DocumentSummary {
   id: number;
   title: string | null;

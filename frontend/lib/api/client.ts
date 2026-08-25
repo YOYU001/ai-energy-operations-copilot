@@ -31,8 +31,12 @@ import type {
   GreenOpsRunResponse,
   GreenOpsSiteResult,
   HealthResponse,
+  PriceClassificationThreshold,
   PriceThresholdInfo,
   RoleMode,
+  ScheduleAnalysisResult,
+  ScheduleRecommendation,
+  ScheduleRunResponse,
   ScoringSignalFlag,
   TimeseriesPage,
   TimeseriesRow,
@@ -371,6 +375,91 @@ export async function postDatasetAnalysis(
   if (!isAnalysisRunResponse(data)) {
     throw new Error(
       `API response schema mismatch: /datasets/${datasetId}/analysis (POST) did not return AnalysisRunResponse`,
+    );
+  }
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Step 13 -- Battery Scheduling (Sub-step 13.4)
+// ---------------------------------------------------------------------------
+
+function isPriceClassificationThreshold(
+  value: unknown,
+): value is PriceClassificationThreshold {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.mode === "string" &&
+    isNullableNumber(v.low_threshold) &&
+    isNullableNumber(v.high_threshold) &&
+    typeof v.non_null_sample_count === "number" &&
+    typeof v.distinct_price_count === "number" &&
+    isNullableString(v.reason)
+  );
+}
+
+function isScheduleRecommendation(value: unknown): value is ScheduleRecommendation {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    isNullableString(v.timestamp) &&
+    typeof v.action === "string" &&
+    typeof v.reason === "string" &&
+    typeof v.price_classification === "string" &&
+    Array.isArray(v.warnings) &&
+    v.warnings.every((w) => typeof w === "string")
+  );
+}
+
+function isScheduleAnalysisResult(value: unknown): value is ScheduleAnalysisResult {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.rule === "string" &&
+    typeof v.rule_version === "string" &&
+    isPriceClassificationThreshold(v.price_threshold) &&
+    typeof v.input_row_count === "number" &&
+    typeof v.evaluated_row_count === "number" &&
+    Array.isArray(v.recommendations) &&
+    v.recommendations.every(isScheduleRecommendation)
+  );
+}
+
+function isScheduleRunResponse(value: unknown): value is ScheduleRunResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.analysis_run_id === "number" &&
+    typeof v.dataset_id === "number" &&
+    typeof v.analysis_type === "string" &&
+    typeof v.rule_version === "string" &&
+    typeof v.created_at === "string" &&
+    isScheduleAnalysisResult(v.result)
+  );
+}
+
+export async function getDatasetSchedule(
+  datasetId: number,
+): Promise<ScheduleRunResponse> {
+  const data = await apiFetch(`/datasets/${datasetId}/schedule`);
+  if (!isScheduleRunResponse(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/schedule did not return ScheduleRunResponse`,
+    );
+  }
+  return data;
+}
+
+export async function postDatasetSchedule(
+  datasetId: number,
+): Promise<ScheduleRunResponse> {
+  const data = await apiFetch(`/datasets/${datasetId}/schedule`, {
+    method: "POST",
+  });
+  if (!isScheduleRunResponse(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/schedule (POST) did not return ScheduleRunResponse`,
     );
   }
   return data;

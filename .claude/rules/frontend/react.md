@@ -21,3 +21,4 @@
 - **需要即時 backend 資料的頁面**，明確標註 `export const dynamic = "force-dynamic"`，不要依賴 Next.js 預設的靜態快取行為。
 - **Tailwind dark mode 成對寫**，例如 `border-black/10 dark:border-white/10`，不要只寫 light mode 忘記補 dark。
 - **UI 文字（使用者看得到的）用繁體中文**（例如 `aria-label="開啟導覽選單"`、頁面說明文字），程式碼內的 comment 目前維持英文——這是既有程式碼的實際寫法，非另外規定，之後若要統一改繁體中文需另外討論。
+- **Recharts 搭配 React 19 的圖表元件（line/area）要設 `isAnimationActive={false}`**，避免進場動畫在 React 19 的 rendering 行為下觸發不必要的重複渲染或視覺閃爍。
