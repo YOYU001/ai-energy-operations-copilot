@@ -60,6 +60,14 @@ async function consumeAssistantStream(
           });
           break;
         }
+        case "thinking": {
+          if (!gotMessageStarted) {
+            console.warn("assistant SSE: ignoring thinking received before message_started");
+            break;
+          }
+          dispatch({ type: "THINKING_STARTED" });
+          break;
+        }
         case "token": {
           if (!gotMessageStarted) {
             console.warn("assistant SSE: ignoring token received before message_started");
@@ -75,7 +83,12 @@ async function consumeAssistantStream(
           }
           dispatch({
             type: "TOOL_ACTIVITY",
-            entry: { type: "call", toolName: evt.data.tool_name, detail: JSON.stringify(evt.data.arguments) },
+            entry: {
+              type: "call",
+              toolName: evt.data.tool_name,
+              detail: JSON.stringify(evt.data.arguments),
+              toolCallId: evt.data.tool_call_id,
+            },
           });
           break;
         }
@@ -86,7 +99,12 @@ async function consumeAssistantStream(
           }
           dispatch({
             type: "TOOL_ACTIVITY",
-            entry: { type: "result", toolName: evt.data.tool_name, detail: evt.data.summary },
+            entry: {
+              type: "result",
+              toolName: evt.data.tool_name,
+              detail: evt.data.summary,
+              toolCallId: evt.data.tool_call_id,
+            },
           });
           break;
         }
