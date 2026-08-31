@@ -4,10 +4,11 @@
 
 ## 目前狀態
 
-已建立兩份規則檔案，並在 `CLAUDE.md` 的「模組化規則」章節掛上 `@` import：
+已建立三份規則檔案，並在 `CLAUDE.md` 的「模組化規則」章節掛上 `@` import：
 
 - `code-style.md`——Python 程式碼風格，核心原則是效率優先（避免重複計算、N+1 查詢等），不是行數最短；依 `backend/app/` 實際程式碼歸納既有慣例（type hint、docstring 只寫 WHY、Pydantic schema、import 順序）。
 - `frontend/react.md`——React/Next.js 慣例。產品定位是 `/assistant` 頁面要做到接近 ChatGPT 的介面與體驗，但資料來源預設走 Internal Knowledge Only；外部搜尋切換目前只做 UI 佔位，功能保持關閉（若要轉正需先在 `CLAUDE.md` 走範圍變更流程）。同時依 `frontend/` 實際程式碼歸納既有慣例（Server Component 為預設、`lib/api/` 為唯一 API 入口、runtime type guard、`@/*` alias 等）。
+- `skills-authoring.md`——撰寫 Claude Code skill 的常駐重點：何時抽成 skill、基本結構、常用 frontmatter（`disable-model-invocation`、`user-invocable`、`allowed-tools`、`context: fork`、`paths` 等）、主體撰寫（被叫用後整個 session 常駐、每行都是重複 token 成本）、`` !`cmd` `` 動態注入與字串替換、評估方式。完整版（所有欄位、skillOverrides、troubleshooting）在 `docs/SKILLS_AUTHORING.md`，只在要寫或改 skill 時才讀。
 
 ## 新增規則檔案時的注意事項
 

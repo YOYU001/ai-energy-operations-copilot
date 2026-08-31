@@ -48,6 +48,9 @@
 
 @.claude/rules/code-style.md
 @.claude/rules/frontend/react.md
+@.claude/rules/skills-authoring.md
+
+撰寫或修改 skill 時，`.claude/rules/skills-authoring.md` 是常駐重點，完整參考（所有 frontmatter 欄位、字串替換、skillOverrides、troubleshooting、eval 流程）見 `docs/SKILLS_AUTHORING.md`，只在該時讀。
 
 ## 常用指令 (Commands)
 
