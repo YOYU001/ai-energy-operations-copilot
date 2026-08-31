@@ -28,6 +28,7 @@ export type RequestPhase =
   | "idle"
   | "connecting"
   | "streaming"
+  | "thinking"
   | "stopping"
   | "completed"
   | "failed-before-stream"
@@ -75,6 +76,7 @@ export type Action =
   | { type: "SEND_REQUESTED"; clientId: string; content: string }
   | { type: "REGENERATE_REQUESTED"; clientId: string; parentUserMessageId: number }
   | { type: "MESSAGE_STARTED"; assistantMessageId: number; attemptNumber: number }
+  | { type: "THINKING_STARTED" }
   | { type: "TOKEN_RECEIVED"; delta: string }
   | { type: "TOOL_ACTIVITY"; entry: ToolActivityEntry }
   | { type: "STOP_REQUESTED" }
@@ -91,7 +93,7 @@ const TERMINAL_RECONCILE_PHASES = new Set<RequestPhase>([
   "aborted",
 ]);
 
-const BUSY_PHASES = new Set<RequestPhase>(["connecting", "streaming", "stopping"]);
+const BUSY_PHASES = new Set<RequestPhase>(["connecting", "streaming", "thinking", "stopping"]);
 
 const MAX_RECONCILE_RETRIES = 3;
 const RECONCILE_RETRY_DELAY_MS = 2000;
@@ -139,24 +141,55 @@ function reducer(state: ChatThreadState, action: Action): ChatThreadState {
           attemptNumber: action.attemptNumber,
         },
       };
+    case "THINKING_STARTED":
+      // Backend/app/main.py's generate() (TODO.md bug 3, 2026-08-26) now
+      // buffers Phase 2 to run a groundedness check before showing
+      // anything -- this fires between the last tool_result and the first
+      // (single, already-verified) token, so the UI has something to show
+      // during what would otherwise look like a stall.
+      if (pending === null || pending.phase !== "streaming") return state;
+      return { ...state, pendingTurn: { ...pending, phase: "thinking" } };
     case "TOKEN_RECEIVED":
-      if (pending === null || (pending.phase !== "streaming" && pending.phase !== "stopping")) {
+      if (
+        pending === null ||
+        (pending.phase !== "streaming" && pending.phase !== "thinking" && pending.phase !== "stopping")
+      ) {
         return state;
       }
       return {
         ...state,
-        pendingTurn: { ...pending, assistantContent: pending.assistantContent + action.delta },
+        pendingTurn: {
+          ...pending,
+          // the verified answer has arrived -- switch back from the
+          // "thinking" indicator to showing real content.
+          phase: pending.phase === "thinking" ? "streaming" : pending.phase,
+          assistantContent: pending.assistantContent + action.delta,
+        },
       };
-    case "TOOL_ACTIVITY":
+    case "TOOL_ACTIVITY": {
       if (pending === null || (pending.phase !== "streaming" && pending.phase !== "stopping")) {
+        return state;
+      }
+      // dedupe on (toolCallId, type) (multi-agent failure-mode sweep,
+      // TODO.md 2026-08-28/31): if the backend ever emits a duplicate
+      // tool_call/tool_result pair for the same call (e.g. a future retry
+      // path), this stops it from rendering as two identical rows.
+      const isDuplicate = pending.toolActivity.some(
+        (existing) => existing.toolCallId === action.entry.toolCallId && existing.type === action.entry.type,
+      );
+      if (isDuplicate) {
         return state;
       }
       return {
         ...state,
         pendingTurn: { ...pending, toolActivity: [...pending.toolActivity, action.entry] },
       };
+    }
     case "STOP_REQUESTED":
-      if (pending === null || (pending.phase !== "connecting" && pending.phase !== "streaming")) {
+      if (
+        pending === null ||
+        (pending.phase !== "connecting" && pending.phase !== "streaming" && pending.phase !== "thinking")
+      ) {
         return state;
       }
       return { ...state, pendingTurn: { ...pending, phase: "stopping" } };

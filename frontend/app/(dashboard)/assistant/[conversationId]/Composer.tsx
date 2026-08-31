@@ -19,7 +19,8 @@ export default function Composer({
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const isBusy = phase === "connecting" || phase === "streaming" || phase === "stopping";
+  const isBusy =
+    phase === "connecting" || phase === "streaming" || phase === "thinking" || phase === "stopping";
   const canSend = !isBusy && value.trim() !== "";
 
   function handleSubmit() {
@@ -47,7 +48,7 @@ export default function Composer({
         placeholder="輸入訊息，Enter 送出、Shift+Enter 換行"
         className="min-h-9 flex-1 resize-none rounded-md border border-black/10 bg-background px-3 py-2 text-sm outline-none focus:border-foreground/30 dark:border-white/10"
       />
-      {(phase === "connecting" || phase === "streaming") && (
+      {(phase === "connecting" || phase === "streaming" || phase === "thinking") && (
         <button
           type="button"
           onClick={onStop}
