@@ -4,3 +4,13 @@ __pycache__/
 .pytest_cache/
 node_modules/
 .DS_Store
+
+# Local git worktrees and standalone scratch sub-projects -- never meant to
+# be tracked by this repo (worktrees/mvp1-debug-1 is a separate worktree of
+# THIS repo; autoresearch_test/ is its own independent git repository).
+worktrees/
+autoresearch_test/
+
+# Local benchmark run output (backend/scripts/run_answer_accuracy_benchmark.py)
+# -- overwritten every run, never meant to be version-controlled (see TODO.md).
+backend/scripts/answer_accuracy_report.json
