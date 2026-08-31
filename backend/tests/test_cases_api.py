@@ -11,7 +11,6 @@ No real OpenAI API calls: app.main._build_embedding_provider is
 monkeypatched to a deterministic fake provider for /cases/search tests.
 """
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -375,15 +374,26 @@ def test_post_case_search_applies_optional_event_type_and_tags(monkeypatch):
 
 
 def test_post_case_search_embedding_provider_error(monkeypatch):
+    """multi-agent failure-mode sweep, TODO.md 2026-08-28/31: this
+    endpoint was the one call to the embedding provider anywhere in
+    main.py with no error handling at all -- a live provider failure
+    (rate limit, network error) previously propagated as a raw,
+    unhandled exception (this test used to assert exactly that via
+    pytest.raises(RuntimeError)). Now caught and turned into a clean,
+    sanitized-detail 502, matching the _PUBLIC_ERROR_MESSAGES convention
+    used elsewhere in main.py -- the raw exception is logged server-side
+    only, never returned to the client."""
     conn = FakeCaseRecordsConnection()
     upsert_case_record(conn, **_kwargs(case_id="case-0001", embedding=[1.0, 0.0, 0.0]))
     _use_fake_connection(conn)
     _use_provider(monkeypatch, _BoomEmbeddingProvider())
     try:
-        with pytest.raises(RuntimeError):
-            client.post("/cases/search", json={"query": "x"})
+        response = client.post("/cases/search", json={"query": "x"})
     finally:
         _clear_override()
+
+    assert response.status_code == 502
+    assert "case search failed" in response.json()["detail"]
 
 
 def test_post_case_search_no_candidates_returns_empty_list(monkeypatch):
