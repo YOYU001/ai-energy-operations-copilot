@@ -82,8 +82,10 @@ class FakeCompletions:
     def __init__(self, stream: FakeAsyncStream = None, raise_on_create: Exception = None):
         self._stream = stream
         self._raise_on_create = raise_on_create
+        self.calls: list[dict] = []
 
     async def create(self, **kwargs):
+        self.calls.append(kwargs)
         if self._raise_on_create is not None:
             raise self._raise_on_create
         return self._stream
@@ -102,6 +104,32 @@ class FakeAsyncOpenAIClient:
 def _make_provider(stream: FakeAsyncStream = None, raise_on_create: Exception = None) -> OpenAIChatProvider:
     client = FakeAsyncOpenAIClient(FakeCompletions(stream=stream, raise_on_create=raise_on_create))
     return OpenAIChatProvider(model="gpt-4o-mini", client=client)
+
+
+def test_tool_choice_is_forwarded_to_the_underlying_api_call_when_given():
+    chunks = [FakeChunk(choices=[FakeChoice(delta=FakeDelta(content=None), finish_reason="stop")])]
+    provider = _make_provider(stream=FakeAsyncStream(chunks))
+
+    async def collect():
+        async for _ in provider.stream_chat(messages=[{"role": "user", "content": "hi"}], tool_choice="required"):
+            pass
+
+    run_async(collect())
+
+    assert provider._client.chat.completions.calls[0]["tool_choice"] == "required"
+
+
+def test_tool_choice_omitted_from_the_underlying_api_call_when_not_given():
+    chunks = [FakeChunk(choices=[FakeChoice(delta=FakeDelta(content=None), finish_reason="stop")])]
+    provider = _make_provider(stream=FakeAsyncStream(chunks))
+
+    async def collect():
+        async for _ in provider.stream_chat(messages=[{"role": "user", "content": "hi"}]):
+            pass
+
+    run_async(collect())
+
+    assert "tool_choice" not in provider._client.chat.completions.calls[0]
 
 
 def test_normal_streaming_yields_deltas_then_finish_with_usage():

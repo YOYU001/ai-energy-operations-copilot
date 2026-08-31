@@ -10,7 +10,16 @@ rendering path via a real (already-used-elsewhere) fixture PDF.
 
 from pathlib import Path
 
-from app.services.ocr_fallback import EasyOcrReaderProvider, ocr_page
+import numpy as np
+
+from app.services.ocr_fallback import (
+    EasyOcrReaderProvider,
+    ReconciledOcrReader,
+    ReconciledOcrReaderProvider,
+    VisionLLMOcrReader,
+    VisionLLMOcrReaderProvider,
+    ocr_page,
+)
 from app.services.pdf_parser import PAGE_STATUS_OCR_FAILED, PAGE_STATUS_SCANNED, PageParseResult
 
 DOCS_DIR = Path(__file__).resolve().parents[2] / "data" / "spike_documents"
@@ -88,3 +97,178 @@ def test_easy_ocr_reader_provider_lazily_creates_and_caches_reader(monkeypatch):
 
     assert reader_a is reader_b  # cached, not re-created
     assert created == [(("ch_tra", "en"), False)]  # model loaded exactly once
+
+
+# ---------------------------------------------------------------------------
+# VisionLLMOcrReader / VisionLLMOcrReaderProvider (2026-08-26): alternative
+# to EasyOcrReaderProvider using a vision-capable chat model instead of a
+# dedicated OCR model. No real OpenAI/network calls -- a fake client is
+# injected, matching how OpenAIEmbeddingProvider's tests avoid a real
+# API call.
+# ---------------------------------------------------------------------------
+
+
+class _FakeChoice:
+    def __init__(self, content: str):
+        self.message = type("_Msg", (), {"content": content})()
+
+
+class _FakeCompletionResponse:
+    def __init__(self, content: str):
+        self.choices = [_FakeChoice(content)]
+
+
+class _FakeChatCompletions:
+    def __init__(self, content: str):
+        self._content = content
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeCompletionResponse(self._content)
+
+
+class _FakeChat:
+    def __init__(self, content: str):
+        self.completions = _FakeChatCompletions(content)
+
+
+class _FakeOpenAIClient:
+    def __init__(self, content: str):
+        self.chat = _FakeChat(content)
+
+
+def test_vision_llm_ocr_reader_sends_image_and_returns_transcribed_lines():
+    fake_client = _FakeOpenAIClient("姓名：劉宥羽\n導師：廖健翔")
+    reader = VisionLLMOcrReader(model="gpt-4o-mini", client=fake_client)
+    image = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    lines = reader.readtext(image)
+
+    assert lines == ["姓名：劉宥羽", "導師：廖健翔"]
+
+    call = fake_client.chat.completions.calls[0]
+    assert call["model"] == "gpt-4o-mini"
+    content_parts = call["messages"][0]["content"]
+    assert content_parts[0]["type"] == "text"
+    assert content_parts[1]["type"] == "image_url"
+    assert content_parts[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_vision_llm_ocr_reader_handles_rgba_input():
+    fake_client = _FakeOpenAIClient("ok")
+    reader = VisionLLMOcrReader(client=fake_client)
+    rgba_image = np.zeros((10, 10, 4), dtype=np.uint8)
+
+    lines = reader.readtext(rgba_image)  # must not raise on the alpha channel
+
+    assert lines == ["ok"]
+
+
+def test_vision_llm_ocr_reader_via_ocr_page_updates_result():
+    fake_client = _FakeOpenAIClient("姓名：劉宥羽\n導師：廖健翔\n期間：114年09月22日")
+    reader = VisionLLMOcrReader(client=fake_client)
+
+    result = ocr_page(str(SCANNED_DOC), _scanned_page_result(), reader)
+
+    assert result.extraction_method == "ocr"
+    assert "劉宥羽" in result.text
+    assert result.page_status == PAGE_STATUS_SCANNED
+
+
+def test_vision_llm_ocr_reader_provider_lazily_creates_and_caches_reader(monkeypatch):
+    created = []
+
+    class _StubOpenAI:
+        def __init__(self):
+            created.append(1)
+
+    import app.services.ocr_fallback as ocr_fallback_module
+
+    monkeypatch.setattr(
+        ocr_fallback_module,
+        "VisionLLMOcrReader",
+        lambda model="gpt-4o-mini", client=None: type("_R", (), {"readtext": lambda self, *a, **k: []})(),
+    )
+
+    provider = VisionLLMOcrReaderProvider(model="gpt-4o-mini")
+    reader_a = provider.get_reader()
+    reader_b = provider.get_reader()
+
+    assert reader_a is reader_b  # cached, not re-created
+
+
+# ---------------------------------------------------------------------------
+# ReconciledOcrReader / ReconciledOcrReaderProvider (2026-08-26): runs
+# EasyOCR + VisionLLMOcrReader on the same page, then asks a vision model to
+# cross-reference both candidates against the image and produce a corrected
+# final transcription.
+# ---------------------------------------------------------------------------
+
+
+class _FakeEasyReader:
+    def __init__(self, lines):
+        self._lines = lines
+        self.calls = 0
+
+    def readtext(self, image, detail=0, paragraph=True):
+        self.calls += 1
+        return self._lines
+
+
+def test_reconciled_ocr_reader_calls_both_readers_then_reconciles_with_image():
+    easy_reader = _FakeEasyReader(["姓名：劉寳羽", "導師：廖健翔"])
+    fake_client = _FakeOpenAIClient("姓名：劉宥羽\n導師：廖健翔")
+    vision_reader = VisionLLMOcrReader(model="gpt-4o-mini", client=fake_client)
+    reader = ReconciledOcrReader(easy_reader, vision_reader)
+    image = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    lines = reader.readtext(image)
+
+    assert lines == ["姓名：劉宥羽", "導師：廖健翔"]
+    assert easy_reader.calls == 1
+    # vision reader called once for its own reading, once inside reconciliation
+    assert len(fake_client.chat.completions.calls) == 2
+
+    reconciliation_call = fake_client.chat.completions.calls[1]
+    content_parts = reconciliation_call["messages"][0]["content"]
+    prompt_text = content_parts[0]["text"]
+    assert "劉寳羽" in prompt_text  # candidate A (EasyOCR) present
+    assert "廖健翔" in prompt_text  # candidate B (vision) present
+    assert content_parts[1]["type"] == "image_url"
+
+
+def test_reconciled_ocr_reader_via_ocr_page_updates_result():
+    easy_reader = _FakeEasyReader(["姓名：劉寳羽"])
+    fake_client = _FakeOpenAIClient("姓名：劉宥羽\n導師：廖健翔\n期間：114年09月22日")
+    vision_reader = VisionLLMOcrReader(client=fake_client)
+    reader = ReconciledOcrReader(easy_reader, vision_reader)
+
+    result = ocr_page(str(SCANNED_DOC), _scanned_page_result(), reader)
+
+    assert result.extraction_method == "ocr"
+    assert "劉宥羽" in result.text
+    assert result.page_status == PAGE_STATUS_SCANNED
+
+
+def test_reconciled_ocr_reader_provider_lazily_creates_and_caches_reader(monkeypatch):
+    import app.services.ocr_fallback as ocr_fallback_module
+
+    monkeypatch.setattr(
+        ocr_fallback_module,
+        "EasyOcrReaderProvider",
+        lambda: type("_P", (), {"get_reader": lambda self: _FakeEasyReader([])})(),
+    )
+    monkeypatch.setattr(
+        ocr_fallback_module,
+        "VisionLLMOcrReader",
+        lambda model="gpt-4o-mini", client=None: type(
+            "_R", (), {"readtext": lambda self, *a, **k: [], "_client": None, "model_name": model}
+        )(),
+    )
+
+    provider = ReconciledOcrReaderProvider(model="gpt-4o-mini")
+    reader_a = provider.get_reader()
+    reader_b = provider.get_reader()
+
+    assert reader_a is reader_b  # cached, not re-created
