@@ -45,7 +45,7 @@ class _FakeCompletingProvider:
     provider_name = "fake"
     model_name = "fake-model"
 
-    def stream_chat(self, messages, tools=None):
+    def stream_chat(self, messages, tools=None, tool_choice=None):
         async def _gen():
             yield ChatDeltaEvent(delta="regenerated answer")
             yield ChatFinishEvent(finish_reason="stop", usage=None)
@@ -153,8 +153,13 @@ def test_regenerate_409_when_already_in_progress(monkeypatch):
 
 
 def _seed_conversation_with_finalized_attempt(conn, status: str):
+    # A short conversational-opener message (per app/services/answer_classifier.py's
+    # allowlist) so the capability guard doesn't reject _FakeCompletingProvider's
+    # zero-tool-call "regenerated answer" -- this fixture is about regenerate
+    # attempt lifecycle mechanics, not capability-guard behavior (covered
+    # separately in test_answer_classifier.py).
     conversation_id = create_conversation(conn)
-    user_message_id = insert_user_message(conn, conversation_id, "please summarize the weather today")
+    user_message_id = insert_user_message(conn, conversation_id, "hi, summarize the weather")
     first_attempt_id = create_streaming_assistant_placeholder(
         conn, conversation_id, user_message_id, 1, "openai", "gpt-4o-mini"
     )
@@ -227,7 +232,7 @@ class _RecordingProvider:
     def __init__(self):
         self.received_messages: list = None
 
-    def stream_chat(self, messages, tools=None):
+    def stream_chat(self, messages, tools=None, tool_choice=None):
         self.received_messages = messages
 
         async def _gen():
@@ -253,7 +258,7 @@ def test_regenerate_context_excludes_superseded_assistant_reply(monkeypatch):
     contents = [m["content"] for m in recording_provider.received_messages]
     # the parent user message must appear exactly once (as the new turn),
     # not duplicated from conversation history
-    assert contents.count("please summarize the weather today") == 1
+    assert contents.count("hi, summarize the weather") == 1
     # the superseded first attempt's answer must not leak into context
     assert "first answer" not in contents
 

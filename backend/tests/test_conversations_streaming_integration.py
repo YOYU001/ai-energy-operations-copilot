@@ -36,7 +36,7 @@ class _FakeCompletingProvider:
     def __init__(self, on_stream_start=None):
         self._on_stream_start = on_stream_start
 
-    def stream_chat(self, messages, tools=None):
+    def stream_chat(self, messages, tools=None, tool_choice=None):
         if self._on_stream_start is not None:
             self._on_stream_start()
 
@@ -105,8 +105,13 @@ def test_phase_c_finalize_persists_against_real_db(monkeypatch, seeded_conversat
     durably visible via a completely separate connection afterward."""
     monkeypatch.setattr(main_module, "_build_chat_provider", lambda: _FakeCompletingProvider())
 
+    # A short conversational-opener message (per
+    # app/services/answer_classifier.py's allowlist) so the capability
+    # guard doesn't reject _FakeCompletingProvider's zero-tool-call answer
+    # -- this test is about Phase C's DB persistence, not capability-guard
+    # behavior (covered separately in test_answer_classifier.py).
     response = client.post(
-        f"/conversations/{seeded_conversation}/messages", json={"content": "integration test question"}
+        f"/conversations/{seeded_conversation}/messages", json={"content": "hi, give me a test answer"}
     )
     assert response.status_code == 200
 

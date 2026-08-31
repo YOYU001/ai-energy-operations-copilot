@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:platform.openai.com)",
+      "WebFetch(domain:tianpan.co)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -32,6 +38,18 @@
             "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/check_md_language.ps1\"",
             "timeout": 10,
             "statusMessage": "Checking markdown language ratio..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/check_reply_language.ps1\"",
+            "timeout": 10,
+            "statusMessage": "Checking reply language ratio..."
           }
         ]
       }

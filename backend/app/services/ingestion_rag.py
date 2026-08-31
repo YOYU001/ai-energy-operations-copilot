@@ -47,7 +47,7 @@ from app.document_chunks_queries import (
 from app.services.chunker import STRATEGIES, chunk_document
 from app.services.embedding_provider import EmbeddingBatchError, EmbeddingProvider
 from app.services.hashing import compute_chunk_id, compute_chunk_metadata_hash, compute_document_content_hash, compute_embedding_content_hash
-from app.services.ocr_fallback import EasyOcrReaderProvider, OcrReader, ocr_page
+from app.services.ocr_fallback import EasyOcrReaderProvider, OcrReader, OcrReaderProvider, ocr_page
 from app.services.pdf_parser import PAGE_STATUS_SCANNED, PageParseResult, parse_pdf_pages
 
 DEFAULT_STRATEGY_NAME = "structured_600_100"
@@ -249,7 +249,7 @@ def ingest_pdf_document(
     pdf_path: str,
     file_name: str,
     embedding_provider: EmbeddingProvider,
-    ocr_reader_provider: EasyOcrReaderProvider | None = None,
+    ocr_reader_provider: OcrReaderProvider | None = None,
     strategy_name: str = DEFAULT_STRATEGY_NAME,
     embed_batch_size: int = EMBED_BATCH_SIZE,
 ) -> IngestionResult:

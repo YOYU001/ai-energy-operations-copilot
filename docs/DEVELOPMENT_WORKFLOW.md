@@ -303,7 +303,21 @@ Training Mode
 
 Structured data 查詢採受控 tool-calling，複用 Step 5 既有查詢函式（`backend/app/datasets_queries.py`），不做 unrestricted Text-to-SQL（見 `docs/DECISIONS.md` ADR-002）。回答格式依 `docs/MVP1_RULES.md` 第 8 節的七部分結構。
 
-### Step 13: Analysis Report
+### Step 13: Rule-Based Scheduling / Cost / Green Operations 補完
+
+補齊 Step 9 原始規劃但未實作的三項（見 `docs/PROJECT_ALIGNMENT_REVIEW.md` §9 2026-08-13 更新）：
+
+```text
+battery scheduling suggestion（charge / discharge / idle recommendation）
+cost estimation（energy cost、arbitrage saving、over-contract risk）
+green operations index（100 分權重公式）
+```
+
+各項需一併完成對應 backend API 與測試；`database/schema.sql` 的 `analysis_runs`（`analysis_type TEXT` + `result_json JSONB`）已是通用設計，不需新增 migration。Dashboard 補上 Step 8 原定但當時未做的 `Cost comparison`、`Green Operations Index` 兩張圖。
+
+以 sub-step 拆分：13.2–13.6（backend rules、API、Dashboard，已完成並 merge，PR #53）、13.7（synthetic fixtures 端對端驗證，結論 `synthetic validation complete`，非 real-world validation）、13.8（Battery Scheduling frontend UI）。MVP v1 正式完成條件之一。
+
+### Step 14: Analysis Report
 
 根據以下資料產生報告：
 
