@@ -129,3 +129,7 @@
 - [x] ~~`POST /cases/search` REST endpoint 沒包 try/except，embedding provider 失敗會變成未處理的 500~~（2026-08-31 完成）。補上 `try/except`，比照既有 `_PUBLIC_ERROR_MESSAGES` 慣例：真實例外只寫進 server log，回傳給前端的是清理過的 502 訊息。既有測試 `test_post_case_search_embedding_provider_error` 原本斷言會 raise `RuntimeError`（等於斷言舊的未處理行為），已更新為斷言乾淨的 502 回應。
 
 **確認沒問題、不需修復**：併發/共享狀態（`evidence_results`／DB connection／embedding provider 全部正確 per-request scoped）、rule engine 邊界條件（向量化實作，空值/單筆/邊界值皆有測試覆蓋）、前端 Stop 按鈕與錯誤 frame 處理（`AbortController` 正確中斷、`message_failed` 有獨立渲染分支）。
+
+**推上 GitHub 前，另外請 Codex CLI 對這批 commit 做一次獨立 review（2026-08-31），發現並當場修好 4 個當天實作本身的真 bug**（詳見 commit「fix: address Codex review findings in groundedness claim-matching」，5 個新單元測試驗證）：① `_unit_alternates` 只比對數字、沒比對單位標籤，導致「50 kW」誤判成跟證據裡「50000 Wh」（不同物理量）相符；② 日期聲明原本獨立於句子其餘 claim 之外做「任一 unit 命中即可」的檢查，會被同句子裡來自不同 chunk 的另一個數字繞過共同定位保證；③ 中文數字解析器的左到右累加邏輯，遇到「二〇二五」這種逐字唸法的年份會被後面的數字覆寫、靜默算成不相關的小數字（例如「5」），修法要求片語裡至少要有一個十/百/千/萬/億單位字元；④ `_heading_matches` 用純子字串比對，導致「Unconfirmed facts / Finding」誤判成有效的 Finding 標題（因為「confirmed facts」是「unconfirmed facts」的子字串），改用 `\b` 詞界比對。
+
+**Codex review 額外發現、判定為既有設計取捨或超出本輪範圍、未在這輪處理**：① `_sanitize_tool_args`（`main.py`）目前無法區分「模型自己亂猜的 document_id」跟「使用者訊息裡明確指定的 document_id」，第一輪一律清空——這是上一輪 session（2026-08-28）就已經接受的設計取捨（見本檔案「模式二」段落），Codex 指出的邊界情況（使用者明確講 ID）是一個值得未來優化的方向，但需要額外解析使用者訊息本身找 ID，非本輪小修可解決；② 前端 SSE/reducer（`sse.ts`／`ChatThread.tsx` 等）沒有自動化測試——這是專案既有、有記錄的範圍決策（見「前端測試框架（Playwright）」段落），不是這輪疏漏。
