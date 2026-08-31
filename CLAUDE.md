@@ -101,6 +101,9 @@ python -m spike.run_retrieval_benchmark
 - **Starlette TestClient 依賴 httpx2**：新版 Starlette 優先使用 `httpx2`，只裝 `httpx`會出現 deprecation warning，需同時安裝 `httpx2`。
 - **SQL DDL 拆分陷阱**：`ensure_schema()` 這類自行拆分多語句 SQL 的邏輯，若檔案開頭有註解區塊，可能誤吞後面的 `CREATE EXTENSION` 陳述式，套用 schema 後務必實際驗證 extension 是否真的建立。
 - **掃描頁判斷勿用單一門檻**：PDF 頁面「近乎空白」與「掃描頁」用單一文字量門檻判斷會誤判合法的近空白頁（例如僅印刷頁碼的分隔頁）；改用 text / near_empty / scanned / ocr_failed 四態分類，OCR 僅在 `scanned` 狀態觸發。
+- **MCP server 中途註冊不會立即生效**：在 session 中途新增或修改 MCP server 設定後，必須重開 Claude Code 才能載入，不要預期當下就能呼叫；建議把所有 MCP／外部 CLI 的註冊集中在一個獨立的設定 session 做完、驗證憑證，再重開後才開始正式工作。
+- **SSL 憑證問題只針對單一行程處理**：遇到 `SSL_CERT_FILE` 相關錯誤時，只在該次執行的行程層級 export（例如指向 certifi 的憑證包），不要更動全域 conda 設定，否則容易掩蓋掉其他環境問題、造成之後的錯誤誤判方向。
+- **瀏覽器分頁縮放不會改變 viewport**：測試 responsive 版面時，瀏覽器分頁的縮放（zoom）不會真的改變 viewport 尺寸，需改用 devtools 的 device toolbar 或實際縮小視窗才能驗證。
 
 ## 資料與回答原則
 
@@ -123,6 +126,8 @@ python -m spike.run_retrieval_benchmark
 ## 開發規則
 
 每次只做一小步，因為本專案採 learning-by-building 模式，小步驟能讓使用者每次都能看懂並確認變更，也能在出錯時快速定位是哪一步造成的。修改前先說明這一步要做什麼、預計修改哪些檔案、有哪些假設或風險。修改後回報 files changed / what was implemented / how to run/test / known limitations / next recommended step，且新增或修改的 pytest 測試須全數通過（exit code 0）才算完成這一步。只修改任務相關檔案，僅實作已討論過的功能，保持模組化以利未來分支擴充。
+
+遇到測試失敗或程式錯誤時，先診斷根因並具體說明給使用者確認後才能動手修改，不可為了讓測試通過而直接調整測試預期或蒙混掉實際的 bug——測試預期本身代表的是不變量（例如某個函式該被呼叫幾次），改動它必須是因為需求真的變了，不是因為當下的實作不符預期。
 
 ## PROGRESS.md 撰寫規則
 
