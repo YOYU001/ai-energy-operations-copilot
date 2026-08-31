@@ -119,23 +119,45 @@ def _format_converted_value(value: float) -> str:
     return str(int(value)) if value == int(value) else str(value)
 
 
-def _unit_alternates(text: str) -> dict[str, str]:
+def _unit_alternates(text: str) -> dict[str, tuple[str, str]]:
     """Maps each claim value that is immediately followed by a recognized
-    kilo/base unit in `text` to its unit-converted equivalent value (e.g.
-    "50" -> "50000" for a "50 kW" occurrence), for find_unsupported_claims
-    to also accept as evidence-supported."""
-    alternates: dict[str, str] = {}
+    kilo/base unit in `text` to (converted_value, target_unit) -- e.g.
+    "50" -> ("50000", "W") for a "50 kW" occurrence.
+
+    Storing the target unit alongside the value (Codex review finding,
+    2026-08-31), not just the bare converted number, closes a real gap:
+    checking only the number let "50 kW" get accepted against evidence
+    that said "50000 Wh" -- a DIFFERENT physical quantity (energy, not
+    power) that merely happens to contain the same digits. The
+    corroboration check must confirm the converted value is followed by
+    the correct unit token in evidence, not just that the number exists
+    somewhere."""
+    alternates: dict[str, tuple[str, str]] = {}
     for match in _UNIT_CLAIM_PATTERN.finditer(text):
         value_str, unit = match.group(1), match.group(2)
         value = float(value_str)
         for kilo_unit, base_unit in _UNIT_PAIRS:
             if unit == kilo_unit:
-                alternates[_normalize(value_str)] = _format_converted_value(value * _KILO_SCALE)
+                alternates[_normalize(value_str)] = (_format_converted_value(value * _KILO_SCALE), base_unit)
                 break
             if unit == base_unit:
-                alternates[_normalize(value_str)] = _format_converted_value(value / _KILO_SCALE)
+                alternates[_normalize(value_str)] = (_format_converted_value(value / _KILO_SCALE), kilo_unit)
                 break
     return alternates
+
+
+def _value_with_unit_in_text(value_str: str, unit_label: str, text: str) -> bool:
+    """Boundary-aware: True if `value_str` appears in `text` immediately
+    followed by (optional whitespace then) `unit_label` at a word
+    boundary, and is not itself a digit-substring of a longer number
+    (same digit-boundary principle as _claim_in_unit)."""
+    pattern = re.compile(rf"(?<!\d){re.escape(value_str)}\s*{re.escape(unit_label)}\b")
+    for match in pattern.finditer(text):
+        start = match.start()
+        if start > 0 and text[start - 1].isdigit():
+            continue
+        return True
+    return False
 
 
 # Chinese-style date claims (multi-agent failure-mode sweep, TODO.md
@@ -223,11 +245,25 @@ def extract_chinese_numeral_claims(text: str) -> list[str]:
     "十二", not "12") -- find_unsupported_claims reports the claim as the
     model actually wrote it, and separately looks up its Arabic-converted
     form via _chinese_numeral_alternates to check against evidence, the
-    same alternates mechanism _unit_alternates already uses for kW/W."""
+    same alternates mechanism _unit_alternates already uses for kW/W.
+
+    Requires at least one 十/百/千/萬/億 unit character in the span (Codex
+    review finding, 2026-08-31): _parse_chinese_numeral's left-to-right
+    accumulator OVERWRITES `number` on each new digit character with no
+    unit between them, so a sequential digit-reading span like "二〇二五"
+    (a Chinese-style year -- 2,0,2,5 read one digit at a time, not the
+    accumulative "value * unit" grammar this parser implements) silently
+    parsed as just "5", not 2025. This project's numeral grammar is
+    accumulative counting words ("十二", "兩百", "五千"), never sequential
+    digit-reading -- every span this function is actually meant to catch
+    already contains a unit character, so requiring one excludes the
+    misparse without excluding any real case."""
     claims = []
     for match in _CHINESE_NUMERAL_SPAN_PATTERN.finditer(text):
         span = match.group()
         if span in _CHINESE_NUMERAL_BLOCKLIST:
+            continue
+        if not any(ch in _CHINESE_UNIT_VALUES or ch in _CHINESE_SECTION_UNIT_VALUES for ch in span):
             continue
         value = _parse_chinese_numeral(span)
         if value:  # 0 and None (nothing parsed) are both not worth checking
@@ -289,8 +325,13 @@ _HEADING_LINE_PATTERN = re.compile(r"^#{1,6}[ \t]*(.+?)[ \t]*$", re.MULTILINE)
 
 
 def _heading_matches(heading_text: str, *keywords: str) -> bool:
+    """Word-boundary-aware (Codex review finding, 2026-08-31): a plain
+    substring check let a heading like "Unconfirmed facts / Finding"
+    match the "confirmed facts" keyword, since "confirmed facts" is a
+    literal substring of "unconfirmed facts" -- \\b anchors keyword
+    matching to real word boundaries instead."""
     lowered = heading_text.lower()
-    return all(keyword in lowered for keyword in keywords)
+    return all(re.search(rf"\b{re.escape(keyword)}\b", lowered) for keyword in keywords)
 
 
 def _iter_headings(text: str) -> list[tuple[int, str]]:
@@ -430,11 +471,19 @@ def find_unsupported_claims(answer_text: str, evidence_results: list[dict]) -> l
         # docstring) -- the matched span is removed from the working copy
         # either way, so its digits are never ALSO independently
         # re-checked by the loop below.
+        # Date spans are pulled out of the sentence text before the ordinary
+        # claim extraction (so "114"/"09"/"22" aren't ALSO independently
+        # re-extracted as three separate numeric claims), but -- unlike an
+        # earlier version of this function -- a date is NOT checked in
+        # isolation against "any unit". It participates in the SAME
+        # per-unit joint-corroboration check as every other claim below
+        # (Codex review finding, 2026-08-31): checking it independently let
+        # a sentence combine a real date from one chunk with a real number
+        # from a DIFFERENT chunk and still pass, defeating the very
+        # co-location guarantee this function exists to provide.
         working_sentence = sentence
-        for date_match in _DATE_CLAIM_PATTERN.finditer(sentence):
-            date_str = date_match.group()
-            if not any(_date_in_unit(date_str, unit) for unit in units):
-                unsupported.append(date_str)
+        date_claims = [m.group() for m in _DATE_CLAIM_PATTERN.finditer(sentence)]
+        for date_str in date_claims:
             working_sentence = working_sentence.replace(date_str, "", 1)
 
         claims = (
@@ -442,18 +491,28 @@ def find_unsupported_claims(answer_text: str, evidence_results: list[dict]) -> l
             + extract_name_claims(working_sentence)
             + extract_chinese_numeral_claims(working_sentence)
         )
-        if not claims:
+        if not claims and not date_claims:
             continue
         normalized_claims = [_normalize(c) for c in claims]
-        alternates = {**_unit_alternates(working_sentence), **_chinese_numeral_alternates(working_sentence)}
+        unit_alternates = _unit_alternates(working_sentence)
+        chinese_alternates = _chinese_numeral_alternates(working_sentence)
 
         def _corroborated(claim: str, unit: str) -> bool:
             if _claim_in_unit(claim, unit):
                 return True
-            alternate = alternates.get(claim)
-            return alternate is not None and _claim_in_unit(alternate, unit)
+            unit_alternate = unit_alternates.get(claim)
+            if unit_alternate is not None:
+                alt_value, alt_unit = unit_alternate
+                if _value_with_unit_in_text(alt_value, alt_unit, unit):
+                    return True
+            chinese_alternate = chinese_alternates.get(claim)
+            return chinese_alternate is not None and _claim_in_unit(chinese_alternate, unit)
 
-        if any(all(_corroborated(c, unit) for c in normalized_claims) for unit in units):
-            continue  # one evidence unit corroborates every claim in this sentence together
+        if any(
+            all(_corroborated(c, unit) for c in normalized_claims) and all(_date_in_unit(d, unit) for d in date_claims)
+            for unit in units
+        ):
+            continue  # one evidence unit corroborates every claim (numbers, names, dates) together
         unsupported.extend(claims)
+        unsupported.extend(date_claims)
     return unsupported

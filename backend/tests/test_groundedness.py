@@ -446,3 +446,64 @@ def test_find_unsupported_claims_matches_chinese_numeral_answer_against_arabic_e
     evidence = _search_documents_evidence("可安裝退役電池12顆")
     unsupported = find_unsupported_claims("可安裝退役電池十二顆", evidence)
     assert unsupported == []
+
+
+# ---------------------------------------------------------------------------
+# Codex CLI review findings (2026-08-31, second opinion before push): four
+# real gaps found in the same-day implementation above, each fixed and
+# regression-tested here before this code was pushed.
+# ---------------------------------------------------------------------------
+
+
+def test_find_unsupported_claims_flags_unit_conversion_against_wrong_dimension():
+    # "50 kW" (power) must NOT be accepted just because the digits "50000"
+    # happen to appear in evidence attached to a DIFFERENT unit ("Wh",
+    # energy) -- these are different physical quantities, not a unit
+    # conversion of the same fact.
+    evidence = _search_documents_evidence("蓄電量為50000 Wh")
+    unsupported = find_unsupported_claims("額定功率為50 kW", evidence)
+    assert unsupported == ["50"]
+
+
+def test_find_unsupported_claims_flags_date_stitched_with_an_unrelated_number_from_another_chunk():
+    # the date is real (chunk A) and the number is real (chunk B), but
+    # never stated TOGETHER anywhere -- the date must not be allowed to
+    # corroborate independently of the rest of the sentence's claims.
+    evidence = _search_documents_evidence(
+        "於114年09月22日完成安裝",  # chunk A: real date, no capacity figure
+        "系統容量為60kWh",  # chunk B: real capacity, different date context
+    )
+    answer = "於114年09月22日測得容量為60kWh。"
+    unsupported = find_unsupported_claims(answer, evidence)
+    assert set(unsupported) == {"114年09月22日", "60"}
+
+
+def test_find_unsupported_claims_passes_date_and_number_stated_together_in_one_chunk():
+    evidence = _search_documents_evidence("於114年09月22日測得容量為60kWh")
+    unsupported = find_unsupported_claims("於114年09月22日測得容量為60kWh。", evidence)
+    assert unsupported == []
+
+
+def test_parse_chinese_numeral_sequential_digit_reading_is_not_extracted_as_a_claim():
+    # "二〇二五" is a Chinese-style year (2,0,2,5 read one digit at a
+    # time), not this project's accumulative counting-word grammar
+    # ("十二", "兩百") -- extract_chinese_numeral_claims must not silently
+    # misparse it as some other, unrelated small number.
+    assert extract_chinese_numeral_claims("二〇二五年的資料") == []
+
+
+def test_find_unsupported_claims_does_not_treat_unconfirmed_heading_as_the_evidence_bound_section():
+    evidence = _search_documents_evidence("SOC 從 91.9% 變化到 89.9%")
+    answer = (
+        "## Unconfirmed facts / Finding\n這裡沒有標題匹配到的內容不該被當作證據約束段落\n\n"
+        "## Possible causes\n42.5% 這種假設性數字不該被誤判成需要證據\n\n"
+        "## Citations\n（無）"
+    )
+    # "Unconfirmed facts / Finding" must NOT match the "confirmed facts" +
+    # "finding" keywords -- falls back to full-text scanning instead, so
+    # the fabricated-looking "42.5%" (correctly, since there IS no real
+    # seven-part structure here) still gets checked against evidence and
+    # rejected, proving the heading wasn't silently misrecognized as a
+    # scoped-out section.
+    unsupported = find_unsupported_claims(answer, evidence)
+    assert "42.5%" in unsupported
