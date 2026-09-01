@@ -2,6 +2,9 @@ import { notFound } from "next/navigation";
 
 import CostAnalysisForm from "@/app/(dashboard)/datasets/[id]/CostAnalysisForm";
 import GreenOpsAnalysisForm from "@/app/(dashboard)/datasets/[id]/GreenOpsAnalysisForm";
+import RunScheduleButton from "@/app/(dashboard)/datasets/[id]/RunScheduleButton";
+import BatteryScheduleOverlay from "@/components/charts/BatteryScheduleOverlay";
+import BatteryScheduleTable from "@/components/charts/BatteryScheduleTable";
 import ChartSection from "@/components/charts/ChartSection";
 import {
   CostAggregateSummary,
@@ -19,6 +22,7 @@ import {
   getDataset,
   getDatasetCost,
   getDatasetGreenOperationsIndex,
+  getDatasetSchedule,
   getDatasetSummary,
   getDatasetTimeseries,
 } from "@/lib/api/client";
@@ -26,6 +30,7 @@ import type {
   CostRunResponse,
   DatasetSummary,
   GreenOpsRunResponse,
+  ScheduleRunResponse,
   TimeseriesRow,
 } from "@/lib/api/types";
 
@@ -107,6 +112,21 @@ async function loadGreenOps(
   } catch (error) {
     // Same rationale as loadCost() -- loadDataset() already confirmed the
     // dataset exists before this function is ever reached.
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+// Unlike loadCost/loadGreenOps, this takes no parameter -- the schedule
+// endpoint has no max_expected_interval_hours (backend/app/schemas.py's
+// ScheduleAnalysisResult), so it is always attempted once reachable rather
+// than gated behind a URL query param.
+async function loadSchedule(datasetId: number): Promise<ScheduleRunResponse | null> {
+  try {
+    return await getDatasetSchedule(datasetId);
+  } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       return null;
     }
@@ -230,7 +250,29 @@ export default async function DatasetChartsPage({
 
   const pageTitle = dataset.name ?? `Dataset ${datasetId}`;
 
+  // Battery Scheduling's rule (backend/app/services/battery_scheduling.py)
+  // evaluates every row independently and never groups by site_id --
+  // ScheduleRecommendation carries no site_id field at all (unlike
+  // Cost/Green Ops' per_site breakdown). A multi-site dataset would mix
+  // recommendations from different sites into one undifferentiated list, so
+  // this section deliberately does not offer to run it there (Step 13
+  // Battery Scheduling frontend decision, 2026-08-14).
+  const scheduleSectionHeader = (
+    <h2 className="text-sm font-semibold">
+      Battery Scheduling（示範用合成資料）
+    </h2>
+  );
+
   if (summary.site_count > 1) {
+    const scheduleSection = (
+      <section className="mt-8">
+        {scheduleSectionHeader}
+        <div className="mt-4 rounded-lg border border-dashed border-black/10 p-6 text-sm text-foreground/70 dark:border-white/10">
+          此規則目前不支援按場域拆分：此資料集包含 {summary.site_count}{" "}
+          個不同場域，暫不提供排程建議。
+        </div>
+      </section>
+    );
     return (
       <PageShell title={pageTitle} description="資料集圖表">
         <div className="rounded-lg border border-dashed border-black/10 p-6 text-sm text-foreground/70 dark:border-white/10">
@@ -238,19 +280,31 @@ export default async function DatasetChartsPage({
         </div>
         {costSection}
         {greenOpsSection}
+        {scheduleSection}
       </PageShell>
     );
   }
 
   if (timeseries.total === 0) {
+    const scheduleSection = (
+      <section className="mt-8">
+        {scheduleSectionHeader}
+        <div className="mt-4">
+          <EmptyState message="此資料集沒有時間序列資料，無法執行排程建議。" />
+        </div>
+      </section>
+    );
     return (
       <PageShell title={pageTitle} description="資料集圖表">
         <EmptyState message="此資料集沒有時間序列資料。" />
         {costSection}
         {greenOpsSection}
+        {scheduleSection}
       </PageShell>
     );
   }
+
+  const scheduleRun = await loadSchedule(datasetId);
 
   const data: TimeSeriesDatum[] = timeseries.items.map((row) => ({
     timestamp: row.timestamp,
@@ -277,6 +331,61 @@ export default async function DatasetChartsPage({
         ]
       : [];
 
+  const batteryPowerSection =
+    scheduleRun === null ? (
+      <ChartSection
+        title="Battery Power"
+        data={data}
+        series={[
+          {
+            dataKey: "battery_power_kw",
+            label: "Battery Power",
+            color: "#3b82f6",
+            unit: "kW",
+          },
+        ]}
+        yAxisLabel="kW"
+        referenceLines={[{ value: 0, label: "待機 (0 kW)" }]}
+      />
+    ) : (
+      <section className="mb-8">
+        <h2 className="text-sm font-semibold">Battery Power</h2>
+        <p className="mt-1 text-xs text-foreground/60">
+          疊加 Battery Scheduling 建議動作（充電／放電／待機／保持）。
+        </p>
+        <div className="mt-3">
+          <BatteryScheduleOverlay
+            data={data}
+            recommendations={scheduleRun.result.recommendations}
+            isTruncated={isTruncated}
+            totalRecommendations={scheduleRun.result.recommendations.length}
+          />
+        </div>
+      </section>
+    );
+
+  const scheduleSection = (
+    <section className="mt-8">
+      <h2 className="text-sm font-semibold">
+        Battery Scheduling（示範用合成資料）
+      </h2>
+      <p className="mt-1 text-xs text-foreground/60">
+        逐列儲能充放電建議（charge / discharge / idle /
+        hold）。主要結果已疊加於上方 Battery Power 圖表，以下為完整明細。
+      </p>
+      {scheduleRun === null ? (
+        <div className="mt-4">
+          <EmptyState message="尚未執行過儲能排程建議。" />
+          <RunScheduleButton datasetId={datasetId} />
+        </div>
+      ) : (
+        <div className="mt-4">
+          <BatteryScheduleTable recommendations={scheduleRun.result.recommendations} />
+        </div>
+      )}
+    </section>
+  );
+
   return (
     <PageShell
       title={pageTitle}
@@ -302,20 +411,7 @@ export default async function DatasetChartsPage({
         </p>
       )}
 
-      <ChartSection
-        title="Battery Power"
-        data={data}
-        series={[
-          {
-            dataKey: "battery_power_kw",
-            label: "Battery Power",
-            color: "#3b82f6",
-            unit: "kW",
-          },
-        ]}
-        yAxisLabel="kW"
-        referenceLines={[{ value: 0, label: "待機 (0 kW)" }]}
-      />
+      {batteryPowerSection}
 
       <ChartSection
         title="Battery SOC"
@@ -382,6 +478,7 @@ export default async function DatasetChartsPage({
 
       {costSection}
       {greenOpsSection}
+      {scheduleSection}
     </PageShell>
   );
 }
