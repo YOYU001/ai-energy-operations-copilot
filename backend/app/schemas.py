@@ -457,3 +457,52 @@ class GreenOpsRunResponse(BaseModel):
     rule_version: str
     created_at: datetime
     result: GreenOpsAnalysisResult
+
+
+# ---------------------------------------------------------------------------
+# Step 14 -- Analysis Report. A snapshot that composes the already-run
+# sub-analyses (Step 5 summary / Step 9 anomaly / Step 13 schedule, cost,
+# green ops) plus a manual pointer for similar cases (Step 11). Persisted in
+# analysis_runs (analysis_type='analysis_report'); no schema migration.
+# See app/services/analysis_report.py for how each section is derived.
+# ---------------------------------------------------------------------------
+
+
+class ReportSection(BaseModel):
+    key: str  # "dataset_overview" | "anomaly_diagnosis" | "battery_schedule" | "similar_cases" | "cost_estimate" | "green_operations_index"
+    title: str
+    status: str  # "included" | "not_run" | "manual_lookup"
+    source_analysis_run_id: Optional[int] = None
+    source_created_at: Optional[datetime] = None
+    summary_points: list[str] = Field(default_factory=list)
+    note: Optional[str] = None
+
+
+class ReportLimitation(BaseModel):
+    kind: str  # "section_not_run" | "snapshot_staleness" | "data_quality"
+    detail: str
+
+
+class AnalysisReportResult(BaseModel):
+    rule: str = "analysis_report"
+    rule_version: str
+    dataset_id: int
+    dataset_name: Optional[str] = None
+    generated_at: datetime
+    row_count: int
+    site_count: int
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    key_findings: list[str] = Field(default_factory=list)
+    sections: list[ReportSection]
+    suggested_actions: list[str] = Field(default_factory=list)
+    limitations: list[ReportLimitation] = Field(default_factory=list)
+
+
+class AnalysisReportRunResponse(BaseModel):
+    analysis_run_id: int
+    dataset_id: int
+    analysis_type: str
+    rule_version: str
+    created_at: datetime
+    result: AnalysisReportResult

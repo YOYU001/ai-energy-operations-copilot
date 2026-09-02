@@ -264,6 +264,52 @@ export interface ScheduleRunResponse {
   result: ScheduleAnalysisResult;
 }
 
+// Step 14 -- Analysis Report. Mirrors backend/app/schemas.py's
+// ReportSection / ReportLimitation / AnalysisReportResult. A snapshot that
+// composes the already-run sub-analyses; sections whose sub-analysis has
+// not run carry status "not_run", similar cases is always "manual_lookup".
+export type ReportSectionStatus = "included" | "not_run" | "manual_lookup";
+
+export interface ReportSection {
+  key: string;
+  title: string;
+  status: ReportSectionStatus;
+  source_analysis_run_id: number | null;
+  source_created_at: string | null;
+  summary_points: string[];
+  note: string | null;
+}
+
+export interface ReportLimitation {
+  kind: string; // "section_not_run" | "snapshot_staleness" | "data_quality"
+  detail: string;
+}
+
+export interface AnalysisReportResult {
+  rule: string;
+  rule_version: string;
+  dataset_id: number;
+  dataset_name: string | null;
+  generated_at: string;
+  row_count: number;
+  site_count: number;
+  start_time: string | null;
+  end_time: string | null;
+  key_findings: string[];
+  sections: ReportSection[];
+  suggested_actions: string[];
+  limitations: ReportLimitation[];
+}
+
+export interface AnalysisReportRunResponse {
+  analysis_run_id: number;
+  dataset_id: number;
+  analysis_type: string;
+  rule_version: string;
+  created_at: string;
+  result: AnalysisReportResult;
+}
+
 export interface DocumentSummary {
   id: number;
   title: string | null;

@@ -4,7 +4,7 @@
 打造 **AI Energy Operations Copilot MVP v1**，作為 NVIDIA 面試作品集與 AI 工程能力展示專案。
 
 ## Current Phase
-Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → Step 10：Knowledge Base / RAG（正式版）8 個 sub-step 全數完成並正式結案 → Step 11：Case Similarity — backend、frontend 均已完成並驗收通過 → Step 12：AI Assistant / Chat UI — backend（Sub-step 1–3C）與 frontend（Slice 1–5）均已完成並驗收通過，PR #46 已 merge 進 main → Step 13.2–13.6：battery scheduling／cost estimation／green operations index 三組規則、API 與 Dashboard（Cost + Green Ops）均已完成並 merge 進 main（PR #53，commit 8d6672a）→ Step 13.7：以 synthetic fixtures 完成端對端驗證，結論 `synthetic validation complete` → **Step 13.8：Battery Scheduling frontend UI 已完成並以真實瀏覽器驗證（golden path／多場域跳過／空資料集三種情境）**。Cost／Green Ops／Battery Scheduling 三者現在都達到 `API + dashboard synthetic validation`。下一步：role mode selector frontend UI（Step 12 遺留項目）與 Analysis Report（Step 14，尚未開始）。
+Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Document Ingestion Spike 已正式結案（Go，8 個 sub-step 全數完成，結案紀錄見 docs/RAG_SPIKE_PLAN.md §18）→ Step 7：Frontend Foundation 驗收通過 → Step 8：Dashboard Charts 驗收通過 → Step 9：Rule-Based Anomaly Diagnosis 驗收通過 → Step 10：Knowledge Base / RAG（正式版）8 個 sub-step 全數完成並正式結案 → Step 11：Case Similarity — backend、frontend 均已完成並驗收通過 → Step 12：AI Assistant / Chat UI — backend（Sub-step 1–3C）與 frontend（Slice 1–5）均已完成並驗收通過，PR #46 已 merge 進 main → Step 13.2–13.6：battery scheduling／cost estimation／green operations index 三組規則、API 與 Dashboard（Cost + Green Ops）均已完成並 merge 進 main（PR #53，commit 8d6672a）→ Step 13.7：以 synthetic fixtures 完成端對端驗證，結論 `synthetic validation complete` → **Step 13.8：Battery Scheduling frontend UI 已完成並以真實瀏覽器驗證（golden path／多場域跳過／空資料集三種情境）**。Cost／Green Ops／Battery Scheduling 三者現在都達到 `API + dashboard synthetic validation` → **Step 14：Analysis Report 已完成（backend + frontend + 測試 + 真實瀏覽器驗證三情境）**。Step 14 完成後，MVP v1 十項功能中僅「角色化回答模式」（Scope 第 9 項）的 frontend selector 尚未實作（backend `role_mode` 欄位已存在可用）。下一步：role mode selector frontend UI。
 
 ## Completed
 - 定義 MVP v1 產品範圍、技術棧、Internal Knowledge Only 原則、初版 data schema，以及 Claude Code learning-by-building / 漸進式開發流程。
@@ -51,6 +51,7 @@ Step 5 已完成 → Project Alignment Review 已完成 → Step 6：RAG Documen
 - Step 12 Frontend 整體收尾驗收：desktop 全流程手動驗證，全專案 503 個測試通過，lint／`tsc --noEmit`／build 全數通過，無 blocker；mobile 視覺驗證待補（見 Current Known Issues）。Details: docs/step12_frontend_chat_ui_plan.md。
 - Step 13.2–13.6：battery scheduling／cost estimation／green operations index 三組規則、API 與 Dashboard（Cost comparison、Green Operations Index 兩張圖）完成並 merge（PR #53，commit 8d6672a）。Step 13.7：synthetic fixtures 端對端驗證（ingestion／API／dashboard／warning path），結論 `synthetic validation complete`。Details: docs/step13_7_synthetic_validation_report.md。
 - Step 13.8 — Battery Scheduling Frontend UI：`datasets/[id]` 頁新增 Battery Scheduling 區塊（`RunScheduleButton` 觸發分析、`BatteryScheduleOverlay` 疊加充電/放電/待機/保持四種色盲友善標記於 Battery Power 圖表、`BatteryScheduleTable` 完整明細，預設收合前 20 筆）；多場域資料集與空資料集分別顯示對應提示訊息，不誤觸規則。`tsc --noEmit`／`eslint`／`next build` 全數通過；已用真實瀏覽器驗證三種情境（單站點 golden path 疊加成功、多場域正確跳過、空資料集正確跳過）。
+- Step 14 — Analysis Report：`services/analysis_report.py`（純函式組出 7 段 snapshot）+ `GET/POST /datasets/{id}/report`（復用 `analysis_runs`，`analysis_type='analysis_report'`，無 migration；`?refresh=true` 重建）+ 新前端路由 `datasets/[id]/report`。報告產生時只組合已存在的子分析結果、不觸發子分析、不呼叫外部 API；similar cases 為手動查詢指引。15 個新測試 + 全 backend 581 測試通過；`tsc`／`eslint`／`next build` 全過；已真實瀏覽器驗證三情境（子分析全齊／部分缺／空資料集不 500）。
 
 ## Important Decisions
 - Frontend：Next.js
@@ -124,11 +125,11 @@ MVP v1 應涵蓋：
 - Step 12 frontend tool activity 只保留在目前頁面 session（`ChatThread` 的 `activityByMessageId` 是純前端 state），reload 或切換對話後就會消失；backend `ChatMessageSummary` 目前不回傳 `tool_calls`，這是已知、非本階段要修的 backend gap。
 - Step 12 frontend citation panel 尚未實作，assistant 回覆裡的 `# Citations` 段落目前只是純文字，非結構化面板。
 - Step 12 frontend role mode selector 尚未實作，Composer 目前沒有角色化回答模式的切換入口（對應 MVP v1 Scope 第 9 項的 UI 部分尚缺，backend `role_mode` 欄位已存在可用）。**MVP1 remaining work。**
-- Analysis Report（Step 14）完全未開始，無 backend endpoint、無 frontend 頁面。**MVP1 remaining work。**
-- Battery Scheduling frontend 尚無自動化測試（`BatteryScheduleOverlay`/`BatteryScheduleTable`/`RunScheduleButton` 均無對應測試檔），目前僅有 `tsc`/`eslint`/`build` 與手動瀏覽器驗證。
+- Analysis Report（Step 14）的 similar cases 段落在 MVP 版本為手動查詢指引，不含即時相似案件比對（報告 POST 刻意不呼叫 embedding API）；報告為 snapshot，子分析重跑後需 `?refresh=true` 重新產生。
+- Battery Scheduling / Analysis Report 的 frontend 元件尚無自動化測試（`BatteryScheduleOverlay`/`BatteryScheduleTable`/`RunScheduleButton`/`report/*` 均無對應測試檔），目前僅有 `tsc`/`eslint`/`build` 與真實瀏覽器驗證。
 
 ## Next Step
-Step 13（battery scheduling／cost estimation／green operations index）的 backend、API、synthetic validation 與 frontend UI 均已完成。MVP1 尚缺 role mode selector frontend UI（Step 12 遺留，backend `role_mode` 欄位已存在）與 Analysis Report（Step 14，完全未開始）才算 MVP1 complete。下一步建議先處理 role mode selector frontend UI（範圍較小），再開始 Analysis Report 的 planning。
+Step 13（含 13.8）與 Step 14（Analysis Report）均已完成，MVP v1 十項功能到齊。MVP1 尚缺 role mode selector frontend UI（Step 12 遺留，backend `role_mode` 欄位已存在可用）才算 MVP1 complete。下一步：實作 role mode selector frontend UI。
 
 ## Files To Read Next Time
 每次一定要先讀：

@@ -182,6 +182,15 @@ BEGIN
     END IF;
 END $$;
 
+-- Generic per-dataset analysis result store, one row per
+-- (dataset_id, analysis_type, rule_version). No CHECK constraint on
+-- analysis_type by design -- new analysis kinds are added purely in the
+-- application layer, no DDL. Known analysis_type values so far:
+--   'battery_should_discharge_but_did_not' (Step 9 anomaly diagnosis)
+--   'battery_scheduling'                   (Step 13.8)
+--   'cost_estimation'                      (Step 13, rule_version carries a max_gap suffix)
+--   'green_operations_index'               (Step 13, rule_version carries a max_gap suffix)
+--   'analysis_report'                      (Step 14 -- a snapshot composed from the above)
 CREATE TABLE IF NOT EXISTS analysis_runs (
     id SERIAL PRIMARY KEY,
     dataset_id INTEGER REFERENCES datasets(id),

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import CostAnalysisForm from "@/app/(dashboard)/datasets/[id]/CostAnalysisForm";
@@ -250,6 +251,17 @@ export default async function DatasetChartsPage({
 
   const pageTitle = dataset.name ?? `Dataset ${datasetId}`;
 
+  const reportLink = (
+    <p className="mb-4 text-sm">
+      <Link
+        href={`/datasets/${datasetId}/report`}
+        className="text-foreground/70 underline"
+      >
+        查看分析報告 →
+      </Link>
+    </p>
+  );
+
   // Battery Scheduling's rule (backend/app/services/battery_scheduling.py)
   // evaluates every row independently and never groups by site_id --
   // ScheduleRecommendation carries no site_id field at all (unlike
@@ -275,6 +287,7 @@ export default async function DatasetChartsPage({
     );
     return (
       <PageShell title={pageTitle} description="資料集圖表">
+        {reportLink}
         <div className="rounded-lg border border-dashed border-black/10 p-6 text-sm text-foreground/70 dark:border-white/10">
           此資料集包含 {summary.site_count} 個不同場域，圖表僅支援單一場域，暫不顯示。
         </div>
@@ -296,6 +309,7 @@ export default async function DatasetChartsPage({
     );
     return (
       <PageShell title={pageTitle} description="資料集圖表">
+        {reportLink}
         <EmptyState message="此資料集沒有時間序列資料。" />
         {costSection}
         {greenOpsSection}
@@ -391,6 +405,7 @@ export default async function DatasetChartsPage({
       title={pageTitle}
       description={`資料集圖表（共 ${timeseries.total} 筆）`}
     >
+      {reportLink}
       {isTruncated && (
         <p className="mb-4 text-xs text-foreground/60">
           此資料集共 {timeseries.total}{" "}

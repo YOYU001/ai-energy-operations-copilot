@@ -2,6 +2,8 @@ import "server-only";
 
 import type {
   AnalysisNote,
+  AnalysisReportResult,
+  AnalysisReportRunResponse,
   AnalysisRunResponse,
   AnomalyResult,
   BatteryDischargeAnalysisResult,
@@ -33,6 +35,8 @@ import type {
   HealthResponse,
   PriceClassificationThreshold,
   PriceThresholdInfo,
+  ReportLimitation,
+  ReportSection,
   RoleMode,
   ScheduleAnalysisResult,
   ScheduleRecommendation,
@@ -705,6 +709,98 @@ export async function postDatasetGreenOperationsIndex(
   if (!isGreenOpsRunResponse(data)) {
     throw new Error(
       `API response schema mismatch: /datasets/${datasetId}/green-operations-index (POST) did not return GreenOpsRunResponse`,
+    );
+  }
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Step 14 -- Analysis Report
+// ---------------------------------------------------------------------------
+
+function isReportSection(value: unknown): value is ReportSection {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.key === "string" &&
+    typeof v.title === "string" &&
+    (v.status === "included" || v.status === "not_run" || v.status === "manual_lookup") &&
+    (v.source_analysis_run_id === null || typeof v.source_analysis_run_id === "number") &&
+    isNullableString(v.source_created_at) &&
+    Array.isArray(v.summary_points) &&
+    v.summary_points.every((p) => typeof p === "string") &&
+    isNullableString(v.note)
+  );
+}
+
+function isReportLimitation(value: unknown): value is ReportLimitation {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.kind === "string" && typeof v.detail === "string";
+}
+
+function isAnalysisReportResult(value: unknown): value is AnalysisReportResult {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.rule === "string" &&
+    typeof v.rule_version === "string" &&
+    typeof v.dataset_id === "number" &&
+    isNullableString(v.dataset_name) &&
+    typeof v.generated_at === "string" &&
+    typeof v.row_count === "number" &&
+    typeof v.site_count === "number" &&
+    isNullableString(v.start_time) &&
+    isNullableString(v.end_time) &&
+    Array.isArray(v.key_findings) &&
+    v.key_findings.every((f) => typeof f === "string") &&
+    Array.isArray(v.sections) &&
+    v.sections.every(isReportSection) &&
+    Array.isArray(v.suggested_actions) &&
+    v.suggested_actions.every((a) => typeof a === "string") &&
+    Array.isArray(v.limitations) &&
+    v.limitations.every(isReportLimitation)
+  );
+}
+
+function isAnalysisReportRunResponse(
+  value: unknown,
+): value is AnalysisReportRunResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.analysis_run_id === "number" &&
+    typeof v.dataset_id === "number" &&
+    typeof v.analysis_type === "string" &&
+    typeof v.rule_version === "string" &&
+    typeof v.created_at === "string" &&
+    isAnalysisReportResult(v.result)
+  );
+}
+
+export async function getDatasetReport(
+  datasetId: number,
+): Promise<AnalysisReportRunResponse> {
+  const data = await apiFetch(`/datasets/${datasetId}/report`);
+  if (!isAnalysisReportRunResponse(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/report did not return AnalysisReportRunResponse`,
+    );
+  }
+  return data;
+}
+
+export async function postDatasetReport(
+  datasetId: number,
+  refresh = false,
+): Promise<AnalysisReportRunResponse> {
+  const query = refresh ? "?refresh=true" : "";
+  const data = await apiFetch(`/datasets/${datasetId}/report${query}`, {
+    method: "POST",
+  });
+  if (!isAnalysisReportRunResponse(data)) {
+    throw new Error(
+      `API response schema mismatch: /datasets/${datasetId}/report (POST) did not return AnalysisReportRunResponse`,
     );
   }
   return data;
