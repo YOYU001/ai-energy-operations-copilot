@@ -12,6 +12,7 @@ from typing import Callable, Optional
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from sqlalchemy import text
 
 from app.case_records_queries import get_case_by_case_id
@@ -34,7 +35,9 @@ from app.conversations_queries import (
     update_conversation,
 )
 from app.datasets_queries import (
+    delete_analysis_run,
     get_analysis_run,
+    get_analysis_runs_for_dataset,
     get_dataset_by_id,
     get_dataset_summary,
     get_dataset_timeseries,
@@ -54,6 +57,8 @@ from app.document_chunks_queries import (
 )
 from app.ingestion import ALL_ENERGY_TIMESERIES_COLUMNS, IngestionError, parse_and_validate_csv
 from app.schemas import (
+    AnalysisReportRunResponse,
+    AnalysisReportResult,
     AnalysisRunResponse,
     BatteryDischargeAnalysisResult,
     CaseDetail,
@@ -111,7 +116,7 @@ from app.services.rule_engine import (
     RULE_VERSION,
     evaluate_battery_should_discharge_but_did_not,
 )
-from app.services import battery_scheduling, cost_estimation, green_operations_index
+from app.services import analysis_report, battery_scheduling, cost_estimation, green_operations_index
 from app.services.tool_registry import (
     TOOL_SCHEMAS,
     ToolExecutionError,
@@ -681,6 +686,135 @@ def post_dataset_green_operations_index(
         inserted = get_analysis_run(conn, dataset_id, green_operations_index.ANALYSIS_TYPE, rule_version)
 
     return _green_ops_run_to_response(inserted)
+
+
+# ---------------------------------------------------------------------------
+# Step 14 -- Analysis Report. Composes the already-run sub-analyses into one
+# snapshot (analysis_type='analysis_report'), reusing get_analysis_run /
+# insert_analysis_run unchanged -- no schema migration. Similar cases (Step
+# 11) stays a manual pointer here: the report POST deliberately makes zero
+# external (embedding) API calls. Snapshot semantics match every other
+# analysis endpoint (POST returns the existing run); refresh=true is the one
+# extra affordance a report needs, since a report aggregating other
+# snapshots goes stale in a way a single rule analysis does not.
+# ---------------------------------------------------------------------------
+
+
+def _report_run_to_response(run: dict) -> AnalysisReportRunResponse:
+    return AnalysisReportRunResponse(
+        analysis_run_id=run["id"],
+        dataset_id=run["dataset_id"],
+        analysis_type=run["analysis_type"],
+        rule_version=run["rule_version"],
+        created_at=run["created_at"],
+        result=AnalysisReportResult.model_validate(run["result_json"]),
+    )
+
+
+_REPORT_SUB_ANALYSIS_MODELS = {
+    ANALYSIS_TYPE: BatteryDischargeAnalysisResult,
+    battery_scheduling.ANALYSIS_TYPE: ScheduleAnalysisResult,
+    cost_estimation.ANALYSIS_TYPE: CostAnalysisResult,
+    green_operations_index.ANALYSIS_TYPE: GreenOpsAnalysisResult,
+}
+
+
+def _pick_sub_analysis(
+    runs: list[dict], analysis_type: str, rule_version: Optional[str] = None
+) -> Optional[analysis_report.SubAnalysis]:
+    """First matching run whose stored result_json still parses against the
+    current model (runs are ordered newest-first by
+    get_analysis_runs_for_dataset). rule_version=None matches by
+    analysis_type alone -- used for cost / green ops, whose persisted
+    rule_version carries a max_gap suffix, so the report takes the most
+    recent run regardless of which parameter produced it. A run written
+    under an older, schema-incompatible model shape is skipped rather than
+    allowed to 500 the report endpoint (anomaly / schedule are already
+    protected by their exact rule_version match; cost / green ops are not,
+    so the ValidationError guard matters most for them)."""
+    model = _REPORT_SUB_ANALYSIS_MODELS[analysis_type]
+    for run in runs:
+        if run["analysis_type"] != analysis_type:
+            continue
+        if rule_version is not None and run["rule_version"] != rule_version:
+            continue
+        try:
+            parsed = model.model_validate(run["result_json"])
+        except ValidationError:
+            continue
+        return analysis_report.SubAnalysis(
+            run_id=run["id"],
+            created_at=run["created_at"],
+            result=parsed,
+        )
+    return None
+
+
+@app.get("/datasets/{dataset_id}/report", response_model=AnalysisReportRunResponse)
+def get_dataset_report(dataset_id: int, conn=Depends(get_db_dependency)):
+    if get_dataset_by_id(conn, dataset_id) is None:
+        raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
+
+    run = get_analysis_run(conn, dataset_id, analysis_report.ANALYSIS_TYPE, analysis_report.RULE_VERSION)
+    if run is None:
+        raise HTTPException(status_code=404, detail="no analysis report yet for this dataset")
+    return _report_run_to_response(run)
+
+
+@app.post("/datasets/{dataset_id}/report", response_model=AnalysisReportRunResponse)
+def post_dataset_report(
+    dataset_id: int,
+    refresh: bool = Query(False),
+    conn=Depends(get_db_dependency),
+):
+    dataset = get_dataset_by_id(conn, dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail=f"dataset {dataset_id} not found")
+
+    existing = get_analysis_run(
+        conn, dataset_id, analysis_report.ANALYSIS_TYPE, analysis_report.RULE_VERSION
+    )
+    if existing is not None and not refresh:
+        return _report_run_to_response(existing)
+
+    summary = get_dataset_summary(conn, dataset_id)
+    sub_runs = get_analysis_runs_for_dataset(conn, dataset_id)
+    result = analysis_report.build_analysis_report(
+        dataset=dataset,
+        summary=summary,
+        generated_at=datetime.now(timezone.utc),
+        anomaly=_pick_sub_analysis(sub_runs, ANALYSIS_TYPE, RULE_VERSION),
+        schedule=_pick_sub_analysis(
+            sub_runs, battery_scheduling.ANALYSIS_TYPE, battery_scheduling.RULE_VERSION
+        ),
+        cost=_pick_sub_analysis(sub_runs, cost_estimation.ANALYSIS_TYPE),
+        green_ops=_pick_sub_analysis(sub_runs, green_operations_index.ANALYSIS_TYPE),
+    )
+
+    try:
+        if refresh and existing is not None:
+            delete_analysis_run(
+                conn, dataset_id, analysis_report.ANALYSIS_TYPE, analysis_report.RULE_VERSION
+            )
+        inserted = insert_analysis_run(
+            conn,
+            dataset_id=dataset_id,
+            analysis_type=analysis_report.ANALYSIS_TYPE,
+            rule_version=analysis_report.RULE_VERSION,
+            result_json=result.model_dump_json(),
+            created_at=datetime.now(timezone.utc),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    if inserted is None:
+        inserted = get_analysis_run(
+            conn, dataset_id, analysis_report.ANALYSIS_TYPE, analysis_report.RULE_VERSION
+        )
+
+    return _report_run_to_response(inserted)
 
 
 def _build_embedding_provider() -> EmbeddingProvider:

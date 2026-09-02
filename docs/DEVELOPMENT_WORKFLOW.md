@@ -303,19 +303,35 @@ Training Mode
 
 Structured data 查詢採受控 tool-calling，複用 Step 5 既有查詢函式（`backend/app/datasets_queries.py`），不做 unrestricted Text-to-SQL（見 `docs/DECISIONS.md` ADR-002）。回答格式依 `docs/MVP1_RULES.md` 第 8 節的七部分結構。
 
-### Step 13: Analysis Report
+### Step 13: Rule-Based Scheduling / Cost / Green Operations 補完
 
-根據以下資料產生報告：
+補齊 Step 9 原始規劃但未實作的三項（見 `docs/PROJECT_ALIGNMENT_REVIEW.md` §9 2026-08-13 更新）：
 
 ```text
-dataset summary
-anomalies
-schedule suggestions
-similar cases
-cost estimate
-green operations index
-limitations
+battery scheduling suggestion（charge / discharge / idle recommendation）
+cost estimation（energy cost、arbitrage saving、over-contract risk）
+green operations index（100 分權重公式）
 ```
+
+各項需一併完成對應 backend API 與測試；`database/schema.sql` 的 `analysis_runs`（`analysis_type TEXT` + `result_json JSONB`）已是通用設計，不需新增 migration。Dashboard 補上 Step 8 原定但當時未做的 `Cost comparison`、`Green Operations Index` 兩張圖。
+
+以 sub-step 拆分：13.2–13.6（backend rules、API、Dashboard，已完成並 merge，PR #53）、13.7（synthetic fixtures 端對端驗證，結論 `synthetic validation complete`，非 real-world validation）、13.8（Battery Scheduling frontend UI，已完成並 merge，PR #64）。MVP v1 正式完成條件之一。
+
+### Step 14: Analysis Report
+
+把已執行的各項子分析組成一份給人看的 snapshot 報告：
+
+```text
+dataset overview（Step 5 summary）
+anomaly diagnosis（Step 9）
+battery schedule suggestions（Step 13.8）
+similar cases（Step 11，MVP 版本為手動查詢指引）
+cost estimate（Step 13）
+green operations index（Step 13）
+limitations（含未執行的子分析、snapshot 過時提醒、資料品質備註）
+```
+
+`GET/POST /datasets/{id}/report` 復用 `analysis_runs`（`analysis_type='analysis_report'`），不需 migration；`POST ?refresh=true` 重建 snapshot。報告產生時只組合現有的子分析結果，不觸發子分析、不呼叫任何外部 API。已完成（backend + frontend + 測試 + 真實瀏覽器驗證）。MVP v1 正式完成條件之一。
 
 ---
 

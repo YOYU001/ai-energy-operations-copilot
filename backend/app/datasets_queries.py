@@ -245,3 +245,47 @@ def insert_analysis_run(conn, dataset_id, analysis_type, rule_version, result_js
         },
     ).mappings().first()
     return dict(row) if row else None
+
+
+GET_ANALYSIS_RUNS_FOR_DATASET_SQL = text(
+    """
+    SELECT id, dataset_id, analysis_type, rule_version, result_json, created_at
+    FROM analysis_runs
+    WHERE dataset_id = :dataset_id
+    ORDER BY created_at DESC, id DESC
+    """
+)
+
+
+def get_analysis_runs_for_dataset(conn, dataset_id):
+    """Every analysis_runs row for one dataset, newest first.
+
+    Step 14's report endpoint needs one round-trip to see which sub-analyses
+    (anomaly / schedule / cost / green ops) have already run, instead of an
+    N+1 series of get_analysis_run calls with per-analysis rule_version
+    guessing (cost / green ops rule_version carries a max_gap suffix, so the
+    report picks the most recent run per analysis_type here).
+    """
+    rows = conn.execute(
+        GET_ANALYSIS_RUNS_FOR_DATASET_SQL, {"dataset_id": dataset_id}
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+DELETE_ANALYSIS_RUN_SQL = text(
+    """
+    DELETE FROM analysis_runs
+    WHERE dataset_id = :dataset_id AND analysis_type = :analysis_type AND rule_version = :rule_version
+    """
+)
+
+
+def delete_analysis_run(conn, dataset_id, analysis_type, rule_version):
+    """Delete one analysis_runs row. Used only by Step 14's
+    POST /datasets/{id}/report?refresh=true to rebuild a stale report
+    snapshot (the other analysis endpoints are insert-once / never delete).
+    Caller owns the surrounding transaction."""
+    conn.execute(
+        DELETE_ANALYSIS_RUN_SQL,
+        {"dataset_id": dataset_id, "analysis_type": analysis_type, "rule_version": rule_version},
+    )
