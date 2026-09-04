@@ -87,7 +87,7 @@ class FakeCompletingProvider:
     provider_name = "fake"
     model_name = "fake-model"
 
-    def stream_chat(self, messages, tools=None):
+    def stream_chat(self, messages, tools=None, tool_choice=None):
         async def _gen():
             yield ChatDeltaEvent(delta="Hello")
             yield ChatDeltaEvent(delta=" world")
@@ -100,7 +100,7 @@ class FakeAPIErrorProvider:
     provider_name = "fake"
     model_name = "fake-model"
 
-    def stream_chat(self, messages, tools=None):
+    def stream_chat(self, messages, tools=None, tool_choice=None):
         async def _gen():
             yield ChatDeltaEvent(delta="partial")
             raise ChatProviderAPIError("simulated provider failure")
@@ -115,7 +115,7 @@ class FakeStallingProvider:
     provider_name = "fake"
     model_name = "fake-model"
 
-    def stream_chat(self, messages, tools=None):
+    def stream_chat(self, messages, tools=None, tool_choice=None):
         async def _gen():
             await asyncio.sleep(10)
             yield ChatDeltaEvent(delta="never reached")  # pragma: no cover
@@ -131,7 +131,7 @@ class FakeSlowButNotStallingProvider:
     provider_name = "fake"
     model_name = "fake-model"
 
-    def stream_chat(self, messages, tools=None):
+    def stream_chat(self, messages, tools=None, tool_choice=None):
         async def _gen():
             for i in range(5):
                 await asyncio.sleep(0.03)
@@ -171,8 +171,11 @@ def test_generate_normal_completion_streams_tokens_and_finalizes_completed(monke
 
     joined = "".join(frames)
     assert "event: message_started" in joined
-    assert 'data: {"delta": "Hello"}' in joined
-    assert 'data: {"delta": " world"}' in joined
+    assert "event: thinking" in joined
+    # Phase 2 is buffered (TODO.md bug 3, 2026-08-26): individual deltas are
+    # no longer streamed live -- the full, verified answer is sent as one
+    # token frame, so "Hello" + " world" arrive combined, not separately.
+    assert 'data: {"delta": "Hello world"}' in joined
     assert "event: message_completed" in joined
     assert "event: message_failed" not in joined
 

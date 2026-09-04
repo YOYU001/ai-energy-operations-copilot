@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import IconButton from "@/components/ui/IconButton";
 import { useMobileDrawer } from "@/components/layout/MobileDrawerContext";
@@ -66,6 +66,25 @@ export default function AssistantShell({
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [isDrawerOpen, setOpenDrawer]);
+
+  // Auto-create-and-select on landing at the bare /assistant index (no
+  // conversation selected) -- reuses handleCreate exactly as the "+ 新對話"
+  // button does, just triggered automatically instead of requiring a
+  // click, so the Composer is ready immediately (2026-08-26, user
+  // request). autoCreateTriggeredRef guards against firing twice (React
+  // Strict Mode double-invokes effects in dev) and against re-firing while
+  // the router.push from a just-finished creation hasn't landed yet.
+  const autoCreateTriggeredRef = useRef(false);
+  useEffect(() => {
+    if (selectedId !== null) {
+      autoCreateTriggeredRef.current = false; // reset so leaving and returning to /assistant can auto-create again
+      return;
+    }
+    if (autoCreateTriggeredRef.current) return;
+    autoCreateTriggeredRef.current = true;
+    void handleCreate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire only on selectedId transitions, not every handleCreate identity change
+  }, [selectedId]);
 
   async function handleCreate() {
     setIsCreating(true);

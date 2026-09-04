@@ -16,17 +16,25 @@
 
 export type AssistantSSEEvent =
   | { event: "message_started"; data: { message_id: number; attempt_number: number } }
+  | { event: "thinking"; data: Record<string, never> }
   | { event: "token"; data: { delta: string } }
-  | { event: "tool_call"; data: { tool_name: string; arguments: Record<string, unknown> } }
-  | { event: "tool_result"; data: { tool_name: string; summary: string } }
+  | { event: "tool_call"; data: { tool_name: string; tool_call_id: string; arguments: Record<string, unknown> } }
+  | { event: "tool_result"; data: { tool_name: string; tool_call_id: string; summary: string } }
   | {
       event: "message_completed";
       data: { message_id: number; finish_reason: string | null; usage: unknown };
     }
   | { event: "message_failed"; data: { message_id: number; error: string } };
 
+// "thinking" (TODO.md bug 3, 2026-08-26): backend/app/main.py's generate()
+// now buffers Phase 2 (final synthesis) instead of streaming it live, so it
+// can run a groundedness check before any of the answer is ever shown --
+// this event fires right when that buffering starts, so the client has a
+// signal to show a working indicator during what would otherwise look like
+// silence between `tool_result`/`message_started` and the first `token`.
 const KNOWN_EVENT_TYPES = new Set<AssistantSSEEvent["event"]>([
   "message_started",
+  "thinking",
   "token",
   "tool_call",
   "tool_result",
