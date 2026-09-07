@@ -6,7 +6,7 @@ import type { PendingTurn } from "./ChatThread";
 // "c-" prefixed real DB id, pending/local rows get a "local-" prefixed
 // clientId. Never mix a client-only id into ChatMessageSummary.id
 // (number) itself.
-export type ViewModelStatus = "completed" | "streaming" | "failed" | "aborted";
+export type ViewModelStatus = "completed" | "streaming" | "thinking" | "failed" | "aborted";
 
 // Step 12 Frontend Slice 5: one line item from a tool_call/tool_result SSE
 // pair. Deliberately NOT paired into a single {call, result} record --
@@ -20,6 +20,14 @@ export interface ToolActivityEntry {
   type: "call" | "result";
   toolName: string;
   detail: string;
+  // multi-agent failure-mode sweep, TODO.md 2026-08-28/31: the SSE
+  // contract previously had no id field for tool_call/tool_result at all,
+  // so a duplicate/retried pair from the backend had nothing to dedupe
+  // against and would render as duplicate rows. Paired with the backend's
+  // own tool_call.id (unique per model-requested call within a turn), so
+  // ChatThread's TOOL_ACTIVITY reducer case can dedupe on
+  // `${toolCallId}:${type}`.
+  toolCallId: string;
 }
 
 export interface MessageViewModel {
@@ -125,6 +133,8 @@ function pendingAssistantViewModel(pending: PendingTurn): MessageViewModel | nul
     case "streaming":
     case "stopping":
       return { ...base, content: pending.assistantContent, status: "streaming", errorMessage: null };
+    case "thinking":
+      return { ...base, content: pending.assistantContent, status: "thinking", errorMessage: null };
     case "completed":
       return { ...base, content: pending.assistantContent, status: "completed", errorMessage: null };
     case "failed-during-stream":

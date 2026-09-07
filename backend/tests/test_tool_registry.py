@@ -58,12 +58,43 @@ def test_tool_execution_error_wraps_underlying_exception(monkeypatch):
         raise RuntimeError("simulated query-layer failure")
 
     monkeypatch.setattr(tool_registry, "get_dataset_summary", _boom)
-    conn = FakeConnection()
+    conn = FakeConnection(rows=[{"id": 1}])  # dataset must exist so _require_dataset_exists passes through to _boom
 
     with pytest.raises(ToolExecutionError) as exc_info:
         execute_tool(conn, None, "get_dataset_summary", {"dataset_id": 1})
 
     assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+# ---------------------------------------------------------------------------
+# _require_dataset_exists (multi-agent failure-mode sweep, TODO.md
+# 2026-08-28/31): a nonexistent dataset_id must not silently succeed with
+# an all-None/empty-shaped result that the groundedness/evidence guard
+# would mistake for real evidence.
+# ---------------------------------------------------------------------------
+
+
+def test_get_dataset_summary_raises_tool_execution_error_for_nonexistent_dataset():
+    conn = FakeConnection(rows=[])  # get_dataset_by_id finds nothing
+
+    with pytest.raises(ToolExecutionError) as exc_info:
+        execute_tool(conn, None, "get_dataset_summary", {"dataset_id": 999})
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+def test_get_dataset_timeseries_raises_tool_execution_error_for_nonexistent_dataset():
+    conn = FakeConnection(rows=[])
+
+    with pytest.raises(ToolExecutionError):
+        execute_tool(conn, None, "get_dataset_timeseries", {"dataset_id": 999})
+
+
+def test_get_dataset_analysis_raises_tool_execution_error_for_nonexistent_dataset():
+    conn = FakeConnection(rows=[])
+
+    with pytest.raises(ToolExecutionError):
+        execute_tool(conn, None, "get_dataset_analysis", {"dataset_id": 999})
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +104,7 @@ def test_tool_execution_error_wraps_underlying_exception(monkeypatch):
 
 def test_get_dataset_summary_happy_path(monkeypatch):
     monkeypatch.setattr(tool_registry, "get_dataset_summary", lambda conn, dataset_id: {"row_count": 10})
-    conn = FakeConnection()
+    conn = FakeConnection(rows=[{"id": 12}])
 
     result = execute_tool(conn, None, "get_dataset_summary", {"dataset_id": 12})
 
@@ -86,7 +117,7 @@ def test_get_dataset_summary_never_calls_the_embedding_provider_factory(monkeypa
     and, in some environments, can fail outright for a tool that has
     nothing to do with embeddings)."""
     monkeypatch.setattr(tool_registry, "get_dataset_summary", lambda conn, dataset_id: {"row_count": 10})
-    conn = FakeConnection()
+    conn = FakeConnection(rows=[{"id": 12}])
 
     def _boom():
         raise AssertionError("embedding provider factory must not be called for get_dataset_summary")
@@ -121,6 +152,7 @@ def test_search_documents_happy_path_calls_retrieve_chunks_with_real_scoring():
 
     assert len(result["results"]) == 1
     assert result["results"][0]["file_name"] == "manual.pdf"
+    assert result["results"][0]["document_id"] == 1
     assert result["results"][0]["pdf_page_number_start"] == 5
     assert "content" in result["results"][0]
 
@@ -155,6 +187,39 @@ def test_search_similar_cases_happy_path_calls_search_by_text_with_real_scoring(
     assert item["case_id"] == "case-0001"
     assert "root_cause" not in item  # answer-shaped fields never surfaced to the model
     assert "matches" in item and "differs" in item
+
+
+def test_search_similar_cases_negative_top_k_is_clamped_to_at_least_one():
+    """multi-agent failure-mode sweep, TODO.md 2026-08-28/31: top_k=-1 used
+    to flow straight into search_by_text's `scored[:top_k]`, which Python
+    silently interprets as "drop the last 1 result" rather than an error --
+    with 3 candidates that meant 2 results came back instead of a clamped,
+    well-defined count."""
+    rows = [
+        {
+            "case_id": f"case-000{i}",
+            "site_id": "SITE-A",
+            "event_time": None,
+            "event_type": "BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT",
+            "symptoms": "did not discharge",
+            "root_cause": "answer-shaped",
+            "operator_action": "answer-shaped",
+            "resolution_result": "answer-shaped",
+            "severity": "high",
+            "tags": "peak_shaving",
+            "related_dataset_id": None,
+            "related_time_range": None,
+            "distance": 0.1 * i,
+        }
+        for i in range(1, 4)
+    ]
+    conn = FakeConnection(rows=rows)
+
+    result = execute_tool(
+        conn, lambda: _FakeEmbeddingProvider(), "search_similar_cases", {"query_text": "battery discharge issue", "top_k": -1}
+    )
+
+    assert len(result["results"]) == 1  # clamped to 1, not len(candidates) - 1 == 2
 
 
 # ---------------------------------------------------------------------------

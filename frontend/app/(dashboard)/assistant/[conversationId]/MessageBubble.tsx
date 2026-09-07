@@ -10,9 +10,24 @@ import ToolActivityPanel from "./ToolActivityPanel";
 // it renders canonical and pending/local bubbles identically.
 const STATUS_LABELS: Record<string, string> = {
   streaming: "回覆中…",
+  thinking: "思考中…",
   failed: "回覆失敗",
   aborted: "已中止回覆",
 };
+
+// TODO.md bug 3 (2026-08-26): shown only while status === "thinking" --
+// backend is buffering + groundedness-checking the final answer, so
+// message.content is still empty at this point; three pulsing dots signal
+// "still working" in place of the (not yet trustworthy) empty text.
+function ThinkingIndicator() {
+  return (
+    <span className="inline-flex items-center gap-1" aria-label="思考中">
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground/40 [animation-delay:-0.3s]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground/40 [animation-delay:-0.15s]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground/40" />
+    </span>
+  );
+}
 
 export default function MessageBubble({
   message,
@@ -59,7 +74,11 @@ export default function MessageBubble({
             {statusLabel}
           </p>
         )}
-        <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        {message.status === "thinking" ? (
+          <ThinkingIndicator />
+        ) : (
+          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        )}
         {isFailed && message.errorMessage && (
           <p className="mt-1 text-xs text-red-600 dark:text-red-400">
             {message.errorMessage}

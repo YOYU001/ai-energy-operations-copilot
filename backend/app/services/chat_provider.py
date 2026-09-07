@@ -89,7 +89,7 @@ class ChatProvider(Protocol):
     model_name: str
 
     def stream_chat(
-        self, messages: list[dict], tools: Optional[list[dict]] = None
+        self, messages: list[dict], tools: Optional[list[dict]] = None, tool_choice: Optional[str] = None
     ) -> AsyncIterator[ChatStreamEvent]: ...
 
 
@@ -111,12 +111,13 @@ class OpenAIChatProvider:
             self._client = AsyncOpenAI()
 
     async def stream_chat(
-        self, messages: list[dict], tools: Optional[list[dict]] = None
+        self, messages: list[dict], tools: Optional[list[dict]] = None, tool_choice: Optional[str] = None
     ) -> AsyncIterator[ChatStreamEvent]:
+        create_kwargs = {"model": self.model_name, "messages": messages, "tools": tools, "stream": True}
+        if tool_choice is not None:
+            create_kwargs["tool_choice"] = tool_choice
         try:
-            stream = await self._client.chat.completions.create(
-                model=self.model_name, messages=messages, tools=tools, stream=True,
-            )
+            stream = await self._client.chat.completions.create(**create_kwargs)
         except Exception as exc:  # noqa: BLE001 -- intentionally broad, matches EmbeddingProvider's fail-closed convention
             raise ChatProviderAPIError("failed to open chat stream") from exc
 
