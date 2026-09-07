@@ -610,3 +610,70 @@ def test_find_unsupported_claims_does_not_split_a_decimal_into_two_sentences():
     evidence = _search_documents_evidence("額定功率為50.5 kW")
     answer = _seven_part_answer(finding="額定功率為50.5 kW。", possible_causes="（無）")
     assert find_unsupported_claims(answer, evidence) == []
+
+
+# ---------------------------------------------------------------------------
+# Codex review of PR #70, head 6549b3d -- four follow-up findings.
+# ---------------------------------------------------------------------------
+
+_U_MINUS = "\u2212"  # Unicode minus sign U+2212
+
+
+def test_find_unsupported_claims_folds_unicode_minus_in_evidence():
+    # F1: answer "50 kW" must NOT be corroborated by evidence that only has
+    # a Unicode-minus "−50 kW" -- opposite sign.
+    evidence = _search_documents_evidence(f"該時段淨功率為 {_U_MINUS}50 kW")
+    answer = _seven_part_answer(finding="該時段功率為 50 kW。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == ["50"]
+
+
+def test_find_unsupported_claims_folds_unicode_minus_in_answer():
+    # F1: a "−50 kW" answer (Unicode minus) IS grounded by "-50 kW"
+    # (ASCII) evidence -- same value, both folded.
+    evidence = _search_documents_evidence("該時段淨功率為 -50 kW")
+    answer = _seven_part_answer(finding=f"該時段功率為 {_U_MINUS}50 kW。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == []
+
+
+def test_value_with_unit_in_text_keeps_sign_check_on_the_conversion_path():
+    # F2: "0.05 kW" -> alternate "50 W" must NOT be accepted against
+    # evidence that only has "-50 W".
+    evidence = _search_documents_evidence("該時段淨功率為 -50 W")
+    answer = _seven_part_answer(finding="該時段功率為 0.05 kW。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == ["0.05"]
+
+
+def test_value_with_unit_in_text_passes_a_matching_negative_conversion():
+    # F2: "-0.05 kW" -> alternate "-50 W" IS grounded by "-50 W" evidence.
+    evidence = _search_documents_evidence("該時段淨功率為 -50 W")
+    answer = _seven_part_answer(finding="該時段功率為 -0.05 kW。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == []
+
+
+def test_percentage_claim_rejected_against_negative_percentage_evidence():
+    # F2 (shared boundary helper): a positive "50%" claim must not match
+    # inside "-50%".
+    evidence = _search_documents_evidence("偏差為 -50% 的異常讀值")
+    answer = _seven_part_answer(finding="效率為 50%。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == ["50%"]
+
+
+def test_find_unsupported_claims_splits_a_sentence_that_ends_in_a_bare_number():
+    # F4: "There are 50. Efficiency is 90%." -- two sentences, two facts
+    # each grounded in its own chunk, must pass even though the first ends
+    # in a bare number.
+    evidence = _search_documents_evidence(
+        "There are 50 units in total.",  # chunk A
+        "Measured efficiency is 90%.",  # chunk B
+    )
+    answer = _seven_part_answer(
+        finding="There are 50. Efficiency is 90%.",
+        possible_causes="(none)",
+    )
+    assert find_unsupported_claims(answer, evidence) == []
+
+
+def test_find_unsupported_claims_still_does_not_split_a_decimal_after_dropping_the_lookbehind():
+    evidence = _search_documents_evidence("額定功率為50.5 kW")
+    answer = _seven_part_answer(finding="額定功率為50.5 kW。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == []

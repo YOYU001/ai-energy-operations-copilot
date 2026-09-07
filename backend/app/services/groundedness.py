@@ -93,8 +93,53 @@ def extract_name_claims(text: str) -> list[str]:
     return _NAME_CLAIM_PATTERN.findall(text)
 
 
+# Unicode minus sign U+2212 -- typeset PDFs and some OCR emit it instead of
+# ASCII "-" (Codex review of PR #70, head 6549b3d). Folded to ASCII on BOTH
+# the answer side and the evidence side so a "-50" claim and a "−50"
+# evidence figure (or vice versa) can never disagree on sign purely by
+# codepoint, which would silently invert charge/discharge direction while
+# passing the gate. Deliberately ONLY U+2212: en dash (–) / em dash (—)
+# commonly denote a range ("2024–2025") or a parenthetical break, not a
+# unary minus -- translating them wholesale would corrupt year ranges,
+# hyphenated IDs and ordinary punctuation.
+_UNICODE_MINUS = "−"
+
+
+def _fold_unicode_minus(text: str) -> str:
+    return text.replace(_UNICODE_MINUS, "-")
+
+
 def _normalize(token: str) -> str:
-    return token.rstrip("%").replace(",", "")
+    return _fold_unicode_minus(token).rstrip("%").replace(",", "")
+
+
+def _standalone_number_match(text: str, start: int, end: int, claim_is_negative: bool) -> bool:
+    """True if `text[start:end]` is a self-contained number, not a fragment
+    of a different one. Shared by _claim_in_unit, _value_with_unit_in_text
+    and _percentage_value_in_text (Codex review of PR #70, head 6549b3d) so
+    every numeric matcher rejects the same coincidences identically:
+      - a digit immediately before or after  ("12" inside "120")
+      - a "." then a digit immediately after ("50" inside "50.5")
+      - a "." immediately before             ("50" as the tail of "1.50")
+      - a genuine minus sign immediately before, when the claim is not
+        itself negative ("50" inside "-50" / "−50") -- a "-" that is itself
+        preceded by a digit is a hyphen between IDs ("2415-1304"), not a
+        minus, and does NOT block the match.
+    Callers pass the already-minus-folded `text`, so only ASCII "-" is
+    checked here."""
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    if before.isdigit() or after.isdigit():
+        return False
+    if after == "." and end + 1 < len(text) and text[end + 1].isdigit():
+        return False  # claim is only the integer part of a longer decimal
+    if before == ".":
+        return False  # claim is only the fractional tail of a longer decimal
+    if before == "-" and not claim_is_negative:
+        minus_preceded_by_digit = start >= 2 and text[start - 2].isdigit()
+        if not minus_preceded_by_digit:
+            return False  # genuine minus sign: positive claim, negative evidence
+    return True
 
 
 # Unit-equivalence for kW/W, kWh/Wh, kVA/VA (multi-agent failure-mode sweep,
@@ -148,34 +193,37 @@ def _unit_alternates(text: str) -> dict[str, tuple[str, str]]:
 
 def _percentage_value_in_text(value_str: str, text: str) -> bool:
     """True if `value_str` occurs in `text` immediately followed by an
-    optional space then a literal '%', and is not a digit-substring of a
-    longer number nor preceded by a sign / decimal point.
+    optional space then a literal '%', as a self-contained number
+    (_standalone_number_match).
 
     A percentage claim must match a percentage-bearing occurrence (Codex
     review of PR #70): _normalize() strips the '%', so without this a
     generated "效率為50%" would be treated as grounded by any bare "50" in
     evidence -- e.g. "額定功率為50 kW" (a completely different quantity).
-    Note "50.5%" does NOT match value "50" here: the regex needs '%' (or
-    whitespace) immediately after the value, and "." breaks that."""
-    for match in re.finditer(rf"(?<!\d){re.escape(value_str)}\s*%", text):
-        start = match.start()
-        if start > 0 and (text[start - 1].isdigit() or text[start - 1] in ".-"):
-            continue
-        return True
+    Sharing _standalone_number_match also means a positive "50%" claim is
+    rejected against "-50%" evidence, and "50.5%" never matches value
+    "50"."""
+    claim_is_negative = value_str.startswith("-")
+    for match in re.finditer(rf"{re.escape(value_str)}\s*%", text):
+        v_start = match.start()
+        if _standalone_number_match(text, v_start, v_start + len(value_str), claim_is_negative):
+            return True
     return False
 
 
 def _value_with_unit_in_text(value_str: str, unit_label: str, text: str) -> bool:
     """Boundary-aware: True if `value_str` appears in `text` immediately
-    followed by (optional whitespace then) `unit_label` at a word
-    boundary, and is not itself a digit-substring of a longer number
-    (same digit-boundary principle as _claim_in_unit)."""
-    pattern = re.compile(rf"(?<!\d){re.escape(value_str)}\s*{re.escape(unit_label)}\b")
+    followed by (optional whitespace then) `unit_label` at a word boundary,
+    AND is a self-contained number there (_standalone_number_match -- Codex
+    review of PR #70, head 6549b3d, closed a gap where this conversion path
+    only rejected a preceding digit, so a positive "0.05 kW" -> "50 W"
+    alternate was accepted against "-50 W" evidence, inverting sign)."""
+    claim_is_negative = value_str.startswith("-")
+    pattern = re.compile(rf"{re.escape(value_str)}\s*{re.escape(unit_label)}\b")
     for match in pattern.finditer(text):
-        start = match.start()
-        if start > 0 and text[start - 1].isdigit():
-            continue
-        return True
+        v_start = match.start()
+        if _standalone_number_match(text, v_start, v_start + len(value_str), claim_is_negative):
+            return True
     return False
 
 
@@ -313,31 +361,15 @@ def _claim_in_unit(claim: str, unit: str) -> bool:
     kind), but harmless to apply there too since Han characters are never
     "digits".
 
-    Also rejects decimal- and sign-continuation matches (Codex review of
-    PR #70): a bare integer claim "50" must NOT be corroborated by "50.5"
-    (the char after the match is "." followed by a digit, so "50" is only
-    the integer part of a different number), by "1.50" (the char before is
-    ".", so "50" is only a fractional tail), nor by "-50" (the char before
-    is a genuine minus sign and the claim is not itself negative -- a
-    positive claim can't be grounded in a negative value). A "-" that is
-    itself preceded by a digit is a hyphen between two IDs ("2415-1304"),
-    not a minus sign, so it does NOT block the match."""
+    Decimal- and sign-continuation coincidences are rejected via the shared
+    _standalone_number_match (Codex review of PR #70): "50" must not be
+    corroborated by "50.5", by "1.50", nor by "-50" / "−50" (unless the
+    claim is itself negative); a "-" preceded by a digit ("2415-1304") is a
+    hyphen between IDs, not a minus, and does not block the match."""
     claim_is_negative = claim.startswith("-")
     for match in re.finditer(re.escape(claim), unit):
-        start, end = match.start(), match.end()
-        before = unit[start - 1] if start > 0 else ""
-        after = unit[end] if end < len(unit) else ""
-        if before.isdigit() or after.isdigit():
-            continue
-        if after == "." and end + 1 < len(unit) and unit[end + 1].isdigit():
-            continue  # claim is only the integer part of a longer decimal
-        if before == ".":
-            continue  # claim is only the fractional tail of a longer decimal
-        if before == "-" and not claim_is_negative:
-            minus_preceded_by_digit = start >= 2 and unit[start - 2].isdigit()
-            if not minus_preceded_by_digit:
-                continue  # genuine minus sign: positive claim, negative evidence
-        return True
+        if _standalone_number_match(unit, match.start(), match.end(), claim_is_negative):
+            return True
     return False
 
 
@@ -470,13 +502,16 @@ def _extract_citations_text(answer_text: str) -> str:
 # two facts are each grounded in a DIFFERENT retrieved chunk was treated as
 # a single sentence, so the per-sentence joint-corroboration check demanded
 # both facts in one chunk and rejected a valid answer. Split on an ordinary
-# period too, but only when it is NOT part of a decimal: `(?<!\d)\.(?=\s|$)`
-# -- a "." preceded by a digit ("50.5") is a decimal point, never a
-# terminator. Abbreviations ("fig. 5", "e.g.") over-split into extra
-# fragments; that only makes the per-fragment check slightly stricter,
-# never MERGES two real sentences and never splits a decimal (accepted
-# "floor, not ceiling" trade-off).
-_SENTENCE_SPLIT_PATTERN = re.compile(r"[。\n]|(?<!\d)\.(?=\s|$)")
+# period followed by whitespace or end-of-string: `\.(?=\s|$)`. The
+# `(?=\s|$)` lookahead alone already excludes a decimal point (a "." inside
+# "50.5" is followed by a digit, never whitespace) -- an earlier extra
+# `(?<!\d)` lookbehind was dropped (Codex review of PR #70, head 6549b3d)
+# because it also wrongly refused to split a sentence whose last token is a
+# number ("There are 50. Efficiency is 90%."). Abbreviations ("fig. 5")
+# still over-split into extra fragments; that only makes the per-fragment
+# check slightly stricter, never MERGES two real sentences and never splits
+# a decimal (accepted "floor, not ceiling" trade-off).
+_SENTENCE_SPLIT_PATTERN = re.compile(r"[。\n]|\.(?=\s|$)")
 
 
 def _evidence_units(evidence_results: list[dict]) -> list[str]:
@@ -537,6 +572,11 @@ def find_unsupported_claims(answer_text: str, evidence_results: list[dict]) -> l
     checked_text = _extract_evidence_restricted_text(answer_text)
     if citations_text:
         checked_text = f"{checked_text}\n{citations_text}"
+    # Fold a Unicode minus in the ANSWER to ASCII before any claim is
+    # extracted (the evidence side is folded in _normalize above), so
+    # "−50" is captured as the negative claim "-50" and sign checks apply
+    # (Codex review of PR #70, head 6549b3d).
+    checked_text = _fold_unicode_minus(checked_text)
 
     unsupported: list[str] = []
     for sentence in _SENTENCE_SPLIT_PATTERN.split(checked_text):

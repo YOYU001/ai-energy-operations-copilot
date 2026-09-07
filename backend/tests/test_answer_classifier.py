@@ -165,3 +165,20 @@ def test_messages_without_a_numbered_dataset_reference_are_not_detected(content)
     from app.services.answer_classifier import looks_like_dataset_reference
 
     assert looks_like_dataset_reference(content) is False
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "請分析 /datasets/12 的圖2",
+        "/dataset/7 的用電趨勢",
+        "dataset_id=12 有沒有異常",
+        "dataset_id: 5 的 Table 3",
+        "datasetId=7 的圖2",
+        "datasetId: 4 呈現什麼",
+    ],
+)
+def test_route_and_identifier_dataset_reference_forms_are_detected(content):
+    from app.services.answer_classifier import looks_like_dataset_reference
+
+    assert looks_like_dataset_reference(content) is True

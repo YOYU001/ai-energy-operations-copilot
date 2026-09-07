@@ -104,3 +104,15 @@ def test_dataset_figure_reference_keeps_the_full_tool_list():
 def test_english_dataset_figure_reference_keeps_the_full_tool_list():
     tools = _tools_for_turn("summarize what Figure 2 of dataset 7 shows")
     assert tools is TOOL_SCHEMAS
+
+
+def test_route_form_dataset_figure_reference_keeps_the_full_tool_list():
+    # Codex review of PR #70, head 6549b3d: "/datasets/12" + "圖2" must keep
+    # the CSV dataset tools.
+    tools = _tools_for_turn("請分析 /datasets/12 的圖2 呈現的用電趨勢")
+    assert tools is TOOL_SCHEMAS
+
+
+def test_identifier_form_dataset_figure_reference_keeps_the_full_tool_list():
+    tools = _tools_for_turn("dataset_id=12 的 Table 3 有幾筆超約時段")
+    assert tools is TOOL_SCHEMAS

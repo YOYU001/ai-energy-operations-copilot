@@ -106,17 +106,22 @@ def looks_like_pdf_table_or_figure_reference(content: str) -> bool:
 
 # A "圖2"/"Table 3" reference usually points at a PDF report, so
 # _tools_for_turn drops the CSV dataset tools for that turn. But when the
-# SAME message also names an imported dataset ("請分析 dataset 12 的圖2"),
-# the figure belongs to that dataset and the model still needs the CSV
-# tools -- removing them there strands a diagnostic turn that is forced to
-# call a tool but has no way to inspect the requested dataset (Codex review
-# of PR #70). This detects an explicit numbered dataset reference so
-# _tools_for_turn can keep the dataset tools in that case.
-# `[\s#]*` rather than `\s*#?\s*` (two adjacent `\s*` around an optional
-# char backtrack quadratically on a long space run that never reaches a
-# digit -- CodeQL ReDoS); `data ?set` rather than `data\s*set` for the
-# same linear-time reason.
-_DATASET_REFERENCE_PATTERN = re.compile(r"(?:dataset|data ?set|資料集)[\s#]*\d+", re.IGNORECASE)
+# SAME message also names an imported dataset, the figure belongs to that
+# dataset and the model still needs the CSV tools -- removing them there
+# strands a diagnostic turn that is forced to call a tool but has no way to
+# inspect the requested dataset (Codex review of PR #70). This detects an
+# explicit numbered dataset reference in the forms this project actually
+# uses -- natural language ("dataset 12", "資料集 12"), the app route
+# ("/datasets/12") and the API identifier ("dataset_id=12", "datasetId: 12")
+# -- mirroring the document detector in main.py.
+#
+# Character classes ([\s#]* / [\s:=#]*) rather than `\s*#?\s*` on purpose:
+# two adjacent `\s*` around an optional char backtrack quadratically on a
+# long space run that never reaches a digit (CodeQL ReDoS). Linear-time.
+_DATASET_REFERENCE_PATTERN = re.compile(
+    r"(?:/datasets?/|\bdatasets?\b[\s#]*|\bdata set\b[\s#]*|\bdataset[ _]?id\b[\s:=#]*|資料集[\s#]*)(\d{1,9})",
+    re.IGNORECASE,
+)
 
 
 def looks_like_dataset_reference(content: str) -> bool:
