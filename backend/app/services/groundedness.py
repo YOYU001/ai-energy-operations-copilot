@@ -146,6 +146,25 @@ def _unit_alternates(text: str) -> dict[str, tuple[str, str]]:
     return alternates
 
 
+def _percentage_value_in_text(value_str: str, text: str) -> bool:
+    """True if `value_str` occurs in `text` immediately followed by an
+    optional space then a literal '%', and is not a digit-substring of a
+    longer number nor preceded by a sign / decimal point.
+
+    A percentage claim must match a percentage-bearing occurrence (Codex
+    review of PR #70): _normalize() strips the '%', so without this a
+    generated "效率為50%" would be treated as grounded by any bare "50" in
+    evidence -- e.g. "額定功率為50 kW" (a completely different quantity).
+    Note "50.5%" does NOT match value "50" here: the regex needs '%' (or
+    whitespace) immediately after the value, and "." breaks that."""
+    for match in re.finditer(rf"(?<!\d){re.escape(value_str)}\s*%", text):
+        start = match.start()
+        if start > 0 and (text[start - 1].isdigit() or text[start - 1] in ".-"):
+            continue
+        return True
+    return False
+
+
 def _value_with_unit_in_text(value_str: str, unit_label: str, text: str) -> bool:
     """Boundary-aware: True if `value_str` appears in `text` immediately
     followed by (optional whitespace then) `unit_label` at a word
@@ -292,13 +311,33 @@ def _claim_in_unit(claim: str, unit: str) -> bool:
     sentence via digit-substring coincidence alone. Not needed for name
     claims (Chinese characters have no adjacency false-positive of this
     kind), but harmless to apply there too since Han characters are never
-    "digits"."""
+    "digits".
+
+    Also rejects decimal- and sign-continuation matches (Codex review of
+    PR #70): a bare integer claim "50" must NOT be corroborated by "50.5"
+    (the char after the match is "." followed by a digit, so "50" is only
+    the integer part of a different number), by "1.50" (the char before is
+    ".", so "50" is only a fractional tail), nor by "-50" (the char before
+    is a genuine minus sign and the claim is not itself negative -- a
+    positive claim can't be grounded in a negative value). A "-" that is
+    itself preceded by a digit is a hyphen between two IDs ("2415-1304"),
+    not a minus sign, so it does NOT block the match."""
+    claim_is_negative = claim.startswith("-")
     for match in re.finditer(re.escape(claim), unit):
         start, end = match.start(), match.end()
-        before_is_digit = start > 0 and unit[start - 1].isdigit()
-        after_is_digit = end < len(unit) and unit[end].isdigit()
-        if not before_is_digit and not after_is_digit:
-            return True
+        before = unit[start - 1] if start > 0 else ""
+        after = unit[end] if end < len(unit) else ""
+        if before.isdigit() or after.isdigit():
+            continue
+        if after == "." and end + 1 < len(unit) and unit[end + 1].isdigit():
+            continue  # claim is only the integer part of a longer decimal
+        if before == ".":
+            continue  # claim is only the fractional tail of a longer decimal
+        if before == "-" and not claim_is_negative:
+            minus_preceded_by_digit = start >= 2 and unit[start - 2].isdigit()
+            if not minus_preceded_by_digit:
+                continue  # genuine minus sign: positive claim, negative evidence
+        return True
     return False
 
 
@@ -321,7 +360,24 @@ def _claim_in_unit(claim: str, unit: str) -> bool:
 # both problems at once: heading-level/wording drift no longer breaks the
 # match, and a missing/reworded end heading can never expand the window
 # past the next real heading of any kind.
-_HEADING_LINE_PATTERN = re.compile(r"^#{1,6}[ \t]*(.+?)[ \t]*$", re.MULTILINE)
+_HEADING_LINE_PATTERN = re.compile(r"^(#{1,6})[ \t]*(.+?)[ \t]*$", re.MULTILINE)
+
+# Headings (in ANY "#" level, tolerant wording) that mark the START of a
+# seven-part section AFTER the evidence-bound Finding/Evidence window. Used
+# as a text fallback so a real later section written at a deeper "#" level
+# than the Finding (e.g. "### Possible causes" under a "## Finding") still
+# ends the window -- while a genuinely nested subheading like "### Details"
+# does not (Codex review of PR #70).
+_POST_EVIDENCE_SECTION_KEYWORDS: tuple[tuple[str, ...], ...] = (
+    ("possible", "causes"),
+    ("possible", "cause"),
+    ("engineering", "background"),
+    ("suggested", "actions"),
+    ("confidence",),
+    ("citations",),
+    ("可能原因",),
+    ("可能成因",),
+)
 
 
 def _heading_matches(heading_text: str, *keywords: str) -> bool:
@@ -334,11 +390,14 @@ def _heading_matches(heading_text: str, *keywords: str) -> bool:
     return all(re.search(rf"\b{re.escape(keyword)}\b", lowered) for keyword in keywords)
 
 
-def _iter_headings(text: str) -> list[tuple[int, str]]:
-    """Returns (start_index, heading_text) for every Markdown heading line
-    in `text`, in order -- start_index is the position of the leading "#",
-    usable directly as a slice boundary."""
-    return [(m.start(), m.group(1)) for m in _HEADING_LINE_PATTERN.finditer(text)]
+def _iter_headings(text: str) -> list[tuple[int, int, str]]:
+    """Returns (start_index, level, heading_text) for every Markdown
+    heading line in `text`, in order. `start_index` is the position of the
+    leading "#" (usable directly as a slice boundary); `level` is the
+    number of leading "#" characters (1-6)."""
+    return [
+        (m.start(), len(m.group(1)), m.group(2)) for m in _HEADING_LINE_PATTERN.finditer(text)
+    ]
 
 
 def _extract_evidence_restricted_text(answer_text: str) -> str:
@@ -362,15 +421,19 @@ def _extract_evidence_restricted_text(answer_text: str) -> str:
     for that case."""
     headings = _iter_headings(answer_text)
     start_idx = next(
-        (i for i, (_, text) in enumerate(headings) if _heading_matches(text, "confirmed facts", "finding")), None
+        (i for i, (_, _, htext) in enumerate(headings) if _heading_matches(htext, "confirmed facts", "finding")),
+        None,
     )
     if start_idx is None:
         return answer_text
-    start = headings[start_idx][0]
+    start, start_level, _ = headings[start_idx]
     end = len(answer_text)
-    for pos, text in headings[start_idx + 1 :]:
-        if _heading_matches(text, "evidence"):
-            continue  # still inside the evidence-bound window
+    for pos, level, htext in headings[start_idx + 1 :]:
+        if _heading_matches(htext, "evidence"):
+            continue  # Evidence itself is inside the window
+        is_later_section = any(_heading_matches(htext, *kw) for kw in _POST_EVIDENCE_SECTION_KEYWORDS)
+        if level > start_level and not is_later_section:
+            continue  # a nested subheading ("### Details") does not end the window
         end = pos
         break
     return answer_text[start:end]
@@ -398,11 +461,22 @@ def _extract_citations_text(answer_text: str) -> str:
     unlike the Finding/Evidence window which is bounded by the next
     non-Evidence heading on both sides."""
     headings = _iter_headings(answer_text)
-    idx = next((i for i, (_, text) in enumerate(headings) if _heading_matches(text, "citations")), None)
+    idx = next((i for i, (_, _, htext) in enumerate(headings) if _heading_matches(htext, "citations")), None)
     return answer_text[headings[idx][0] :] if idx is not None else ""
 
 
-_SENTENCE_SPLIT_PATTERN = re.compile(r"[。\n]")
+# English answers terminate sentences with "." not "。" (Codex review of
+# PR #70): an answer like "Rated power is 50 kW. Efficiency is 90%." whose
+# two facts are each grounded in a DIFFERENT retrieved chunk was treated as
+# a single sentence, so the per-sentence joint-corroboration check demanded
+# both facts in one chunk and rejected a valid answer. Split on an ordinary
+# period too, but only when it is NOT part of a decimal: `(?<!\d)\.(?=\s|$)`
+# -- a "." preceded by a digit ("50.5") is a decimal point, never a
+# terminator. Abbreviations ("fig. 5", "e.g.") over-split into extra
+# fragments; that only makes the per-fragment check slightly stricter,
+# never MERGES two real sentences and never splits a decimal (accepted
+# "floor, not ceiling" trade-off).
+_SENTENCE_SPLIT_PATTERN = re.compile(r"[。\n]|(?<!\d)\.(?=\s|$)")
 
 
 def _evidence_units(evidence_results: list[dict]) -> list[str]:
@@ -494,10 +568,18 @@ def find_unsupported_claims(answer_text: str, evidence_results: list[dict]) -> l
         if not claims and not date_claims:
             continue
         normalized_claims = [_normalize(c) for c in claims]
+        # Normalized values that were written as a percentage in the answer
+        # (Codex review of PR #70): these must be corroborated by a
+        # percentage-bearing occurrence in evidence, never by a bare number.
+        percentage_values = {_normalize(c) for c in claims if c.endswith("%")}
         unit_alternates = _unit_alternates(working_sentence)
         chinese_alternates = _chinese_numeral_alternates(working_sentence)
 
         def _corroborated(claim: str, unit: str) -> bool:
+            if claim in percentage_values:
+                # A percentage claim needs a "%"-bearing match -- do NOT
+                # fall through to bare-number / unit-conversion matching.
+                return _percentage_value_in_text(claim, unit)
             if _claim_in_unit(claim, unit):
                 return True
             unit_alternate = unit_alternates.get(claim)

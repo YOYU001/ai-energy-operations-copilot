@@ -507,3 +507,106 @@ def test_find_unsupported_claims_does_not_treat_unconfirmed_heading_as_the_evide
     # scoped-out section.
     unsupported = find_unsupported_claims(answer, evidence)
     assert "42.5%" in unsupported
+
+
+# ---------------------------------------------------------------------------
+# Codex review of PR #70 -- six follow-up findings, one regression group each.
+# ---------------------------------------------------------------------------
+
+
+def test_find_unsupported_claims_flags_a_percentage_claim_only_backed_by_a_bare_number():
+    # P1: normalization strips "%", so an invented "效率為50%" must NOT be
+    # treated as grounded by evidence that only says "50 kW" (a different
+    # quantity that merely shares the digits).
+    evidence = _search_documents_evidence("該設備額定功率為50 kW，未提供效率數據")
+    answer = _seven_part_answer(finding="該設備效率為50%。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == ["50%"]
+
+
+def test_find_unsupported_claims_passes_a_percentage_claim_backed_by_a_percentage_in_evidence():
+    evidence = _search_documents_evidence("實測轉換效率為50%")
+    answer = _seven_part_answer(finding="該設備效率為50%。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == []
+
+
+def test_find_unsupported_claims_keeps_nested_subheading_inside_the_evidence_window():
+    # P1: a nested "### Details" inside the Finding must not end the
+    # evidence-bound window early -- an invented number after it (and
+    # before the real "## Evidence") must still be checked and flagged.
+    evidence = _search_documents_evidence("額定功率為5 kW")
+    answer = (
+        "## Confirmed facts / Finding\n額定功率為5 kW。\n\n"
+        "### Details\n進一步估算顯示可達 999 kW 的峰值輸出。\n\n"
+        "## Evidence\n（來自文件）\n\n"
+        "## Possible causes\n（無）\n\n"
+        "## General engineering background\n（無）\n\n"
+        "## Suggested actions / Next checks\n（無）\n\n"
+        "## Confidence\n高信心，約 88%\n\n"
+        "## Citations\n（無）"
+    )
+    unsupported = find_unsupported_claims(answer, evidence)
+    assert "999" in unsupported
+    assert "88" not in unsupported  # Confidence stays outside the window
+
+
+def test_find_unsupported_claims_still_scopes_out_a_deeper_level_real_later_section():
+    # a real later section written one "#" level deeper than the Finding
+    # ("### Possible causes" under "## Finding") still ends the window --
+    # only genuinely nested subheadings (not named like a seven-part
+    # section) are kept inside.
+    evidence = _search_documents_evidence("額定功率為5 kW")
+    answer = (
+        "## Confirmed facts / Finding\n額定功率為5 kW。\n\n"
+        "## Evidence\n（來自文件）\n\n"
+        "### Possible causes\n推測負載約 42.5% 時最省電。\n\n"
+        "### Citations\n（無）"
+    )
+    assert find_unsupported_claims(answer, evidence) == []
+
+
+def test_claim_in_unit_rejects_integer_part_of_a_longer_decimal():
+    # P2: evidence "50.5 kW" must NOT corroborate a claim of "50 kW".
+    evidence = _search_documents_evidence("實測額定功率為50.5 kW")
+    answer = _seven_part_answer(finding="該設備額定功率為50 kW。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == ["50"]
+
+
+def test_claim_in_unit_rejects_positive_claim_against_negative_evidence():
+    # P2: evidence "-50 kW" (a negative value) must NOT corroborate a
+    # positive claim of "50 kW".
+    evidence = _search_documents_evidence("該時段淨功率為 -50 kW")
+    answer = _seven_part_answer(finding="該時段功率為 50 kW。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == ["50"]
+
+
+def test_claim_in_unit_still_accepts_a_hyphen_separated_id_number():
+    # the "-" preceded by another digit is a hyphen between IDs, not a
+    # minus sign, so "1304" is still found inside "2415-1304".
+    evidence = _search_documents_evidence("額定功率為50 kW（來源：2415-1304研究報告.pdf）")
+    answer = _seven_part_answer(
+        finding="額定功率為50 kW。",
+        possible_causes="（無）",
+    ).replace("## Citations\n（無）", "## Citations\n- 2415-1304研究報告.pdf")
+    assert find_unsupported_claims(answer, evidence) == []
+
+
+def test_find_unsupported_claims_splits_english_sentences_on_period():
+    # P2: two English facts each grounded in a DIFFERENT retrieved chunk
+    # must pass -- they are two sentences, not one, so the per-sentence
+    # co-location check applies to each separately.
+    evidence = _search_documents_evidence(
+        "The rated power is 50 kW.",  # chunk A
+        "Measured efficiency is 90%.",  # chunk B
+    )
+    answer = _seven_part_answer(
+        finding="Rated power is 50 kW. Efficiency is 90%.",
+        possible_causes="(none)",
+    )
+    assert find_unsupported_claims(answer, evidence) == []
+
+
+def test_find_unsupported_claims_does_not_split_a_decimal_into_two_sentences():
+    # the "." in "50.5" is a decimal point, never a sentence terminator.
+    evidence = _search_documents_evidence("額定功率為50.5 kW")
+    answer = _seven_part_answer(finding="額定功率為50.5 kW。", possible_causes="（無）")
+    assert find_unsupported_claims(answer, evidence) == []

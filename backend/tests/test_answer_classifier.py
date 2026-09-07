@@ -127,3 +127,41 @@ def test_pdf_table_or_figure_references_are_detected(content):
 )
 def test_non_table_figure_messages_are_not_detected(content):
     assert looks_like_pdf_table_or_figure_reference(content) is False
+
+
+# ---------------------------------------------------------------------------
+# looks_like_dataset_reference (Codex review of PR #70): lets _tools_for_turn
+# keep the CSV dataset tools when a "圖2"/"Table 3" message ALSO names an
+# imported dataset explicitly.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "請分析 dataset 12 的圖2",
+        "dataset 7 有什麼異常",
+        "資料集 3 的用電趨勢",
+        "what does Figure 2 of dataset 7 show",
+        "compare data set 4 and data set 5",
+    ],
+)
+def test_explicit_numbered_dataset_reference_is_detected(content):
+    from app.services.answer_classifier import looks_like_dataset_reference
+
+    assert looks_like_dataset_reference(content) is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "表4中，2024年8月30日這天記錄了幾個超約時段？",
+        "這份文件的結論是什麼",
+        "為什麼電池沒有放電",
+        "請分析這個資料集",  # no number -> not an explicit dataset id reference
+    ],
+)
+def test_messages_without_a_numbered_dataset_reference_are_not_detected(content):
+    from app.services.answer_classifier import looks_like_dataset_reference
+
+    assert looks_like_dataset_reference(content) is False

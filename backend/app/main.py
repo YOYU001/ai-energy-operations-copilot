@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -97,7 +98,11 @@ from app.services.case_retrieval import (
     list_case_summaries,
     search_by_text,
 )
-from app.services.answer_classifier import looks_like_diagnostic_question, looks_like_pdf_table_or_figure_reference
+from app.services.answer_classifier import (
+    looks_like_dataset_reference,
+    looks_like_diagnostic_question,
+    looks_like_pdf_table_or_figure_reference,
+)
 from app.services.groundedness import find_unsupported_claims
 from app.services.case_similarity import ScoredCase, case_similarity_label
 from app.services.chat_provider import (
@@ -323,16 +328,44 @@ def _known_document_ids(evidence_results: list[dict]) -> set[int]:
     return ids
 
 
-def _sanitize_tool_args(name: str, args: dict, evidence_results: list[dict]) -> dict:
+# Character classes ([\s#]* / [\s:=#]*) rather than `\s*#?\s*` on purpose:
+# two adjacent `\s*` around an optional char backtrack quadratically on a
+# long run of spaces that never reaches a digit (CodeQL ReDoS). A single
+# char class matches the same separators in linear time.
+_USER_DOCUMENT_REF_PATTERN = re.compile(
+    r"(?:/?documents?/|\bdocuments?\b[\s#]*|\bdoc\b[\s#]*|\bdocument[ _]?id\b[\s:=#]*|文件[\s#]*)(\d{1,9})",
+    re.IGNORECASE,
+)
+
+
+def _user_referenced_document_ids(content: str) -> set[int]:
+    """document_ids the USER explicitly named in their own message -- e.g.
+    "/documents/17", "document 17", "文件 17". _sanitize_tool_args must NOT
+    strip these as "guessed" (Codex review of PR #70): the user pointing at
+    a visible document ID is a legitimate, observed source for that filter,
+    categorically different from the model inventing an ID it never saw."""
+    return {int(m.group(1)) for m in _USER_DOCUMENT_REF_PATTERN.finditer(content)}
+
+
+def _sanitize_tool_args(
+    name: str, args: dict, evidence_results: list[dict], user_document_ids: set[int] = frozenset()
+) -> dict:
     """Strips a guessed, never-actually-seen document_id off a
     search_documents call instead of letting it silently zero out the
     search (TODO.md "mode 2" finding, 2026-08-28) -- dropping an invalid
     restriction and searching broadly is strictly safer than either
     executing the doomed-to-be-empty filtered search or rejecting the call
-    outright and costing another round-trip."""
+    outright and costing another round-trip.
+
+    A document_id is kept when the model has legitimately seen it -- either
+    in an earlier search_documents result THIS turn (_known_document_ids)
+    or because the USER explicitly named it in their message
+    (user_document_ids, Codex review of PR #70) -- and only then."""
     if name != "search_documents" or args.get("document_id") is None:
         return args
     if args["document_id"] in _known_document_ids(evidence_results):
+        return args
+    if args["document_id"] in user_document_ids:
         return args
     return {**args, "document_id": None}
 
@@ -1360,6 +1393,7 @@ async def generate(
     is_diagnostic: bool,
     build_embedding_provider: Callable[[], EmbeddingProvider],
     tools: list[dict] = TOOL_SCHEMAS,
+    user_document_ids: set[int] = frozenset(),
 ):
     """Phase B + C. Step 12 Sub-step 3B, revised after review: **two
     strictly separate phases**, not one interleaved loop, to close an
@@ -1518,7 +1552,7 @@ async def generate(
                         args = json.loads(raw_args) if raw_args else {}
                     except ValueError:
                         args = {}
-                    args = _sanitize_tool_args(name, args, evidence_results)
+                    args = _sanitize_tool_args(name, args, evidence_results, user_document_ids)
                     # tool_call_id included in both frames (multi-agent failure-mode
                     # sweep, TODO.md 2026-08-28/31): the frontend SSE contract had no
                     # id field for tool_call/tool_result at all, so if the backend
@@ -1739,8 +1773,15 @@ def _tools_for_turn(content: str) -> list[dict]:
     """Both post_message and post_regenerate need this identical decision
     (TODO.md, 2026-08-26) -- factored out so the two near-duplicate route
     bodies can't silently diverge (e.g. one call site getting this fix,
-    the other being missed in a future edit)."""
-    if looks_like_pdf_table_or_figure_reference(content):
+    the other being missed in a future edit).
+
+    A bare "圖2"/"Table 3" reference is treated as a PDF report reference
+    and the CSV dataset tools are withheld for that turn. But if the same
+    message ALSO names an imported dataset ("請分析 dataset 12 的圖2"), the
+    figure belongs to that dataset -- withholding the dataset tools there
+    would strand a diagnostic turn that is forced to call a tool yet has no
+    way to inspect the requested CSV (Codex review of PR #70)."""
+    if looks_like_pdf_table_or_figure_reference(content) and not looks_like_dataset_reference(content):
         return NON_DATASET_TOOL_SCHEMAS
     return TOOL_SCHEMAS
 
@@ -1774,6 +1815,7 @@ async def post_message(conversation_id: int, body: PostMessageRequest, request: 
         generate(
             assistant_message_id, provider, provider_messages, request, is_diagnostic, _build_embedding_provider,
             tools=_tools_for_turn(content),
+            user_document_ids=_user_referenced_document_ids(content),
         ),
         media_type="text/event-stream",
     )
@@ -1834,6 +1876,7 @@ async def post_regenerate(conversation_id: int, message_id: int, request: Reques
         generate(
             assistant_message_id, provider, provider_messages, request, is_diagnostic, _build_embedding_provider,
             tools=_tools_for_turn(parent_content),
+            user_document_ids=_user_referenced_document_ids(parent_content),
         ),
         media_type="text/event-stream",
     )

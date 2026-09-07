@@ -91,3 +91,16 @@ def test_no_warning_logged_when_nothing_is_dropped(caplog):
         _build_provider_messages(prior, "新的問題", None, conversation_id=99)
 
     assert caplog.records == []
+
+
+def test_dataset_figure_reference_keeps_the_full_tool_list():
+    # Codex review of PR #70: "圖2" alone -> PDF filter, but "dataset 12"
+    # in the same message means the figure belongs to that CSV dataset, so
+    # the dataset tools must stay available.
+    tools = _tools_for_turn("請分析 dataset 12 的圖2 呈現的用電趨勢")
+    assert tools is TOOL_SCHEMAS
+
+
+def test_english_dataset_figure_reference_keeps_the_full_tool_list():
+    tools = _tools_for_turn("summarize what Figure 2 of dataset 7 shows")
+    assert tools is TOOL_SCHEMAS

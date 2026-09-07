@@ -102,3 +102,22 @@ _PDF_TABLE_OR_FIGURE_PATTERN = re.compile(r"(表|圖|table|figure)\s*\d+", re.IG
 
 def looks_like_pdf_table_or_figure_reference(content: str) -> bool:
     return _PDF_TABLE_OR_FIGURE_PATTERN.search(content) is not None
+
+
+# A "圖2"/"Table 3" reference usually points at a PDF report, so
+# _tools_for_turn drops the CSV dataset tools for that turn. But when the
+# SAME message also names an imported dataset ("請分析 dataset 12 的圖2"),
+# the figure belongs to that dataset and the model still needs the CSV
+# tools -- removing them there strands a diagnostic turn that is forced to
+# call a tool but has no way to inspect the requested dataset (Codex review
+# of PR #70). This detects an explicit numbered dataset reference so
+# _tools_for_turn can keep the dataset tools in that case.
+# `[\s#]*` rather than `\s*#?\s*` (two adjacent `\s*` around an optional
+# char backtrack quadratically on a long space run that never reaches a
+# digit -- CodeQL ReDoS); `data ?set` rather than `data\s*set` for the
+# same linear-time reason.
+_DATASET_REFERENCE_PATTERN = re.compile(r"(?:dataset|data ?set|資料集)[\s#]*\d+", re.IGNORECASE)
+
+
+def looks_like_dataset_reference(content: str) -> bool:
+    return _DATASET_REFERENCE_PATTERN.search(content) is not None
