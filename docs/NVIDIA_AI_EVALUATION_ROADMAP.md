@@ -121,6 +121,29 @@ Adopt / Conditional / Reject
 
 ---
 
+## 1a. 狀態標記約定（Current baseline / Planned work / Non-MVP reference）
+
+這份文件同時記錄「已完成的評測基礎」與「未來想做的評測」，早期版本兩者混在一起，容易讓人誤以為某個 runner 還要重寫。從本次修訂起，每個評測項目都標一種狀態：
+
+| 標記 | 意義 |
+|---|---|
+| **Current baseline** | 已在 `main` 實作、可直接執行，並已有記錄過的基準數字。新的評測工作要「接續」而不是「重造」這些。 |
+| **Planned work** | 尚未實作、但屬於本 MVP v1 evaluation 範圍、預計要補的項目。 |
+| **Non-MVP reference** | 獨立的未來 portfolio 專案或純學習參考。**不是本 repo 的 acceptance gate，不得阻擋 MVP v1 的完成判定。** |
+
+### 目前的 Current baseline 一覽（`main` 上已可執行）
+
+| 能力 | 實作 | 產出的指標 | 報告位置 | 最近一次記錄的數字 |
+|---|---|---|---|---|
+| Retrieval quality | `backend/scripts/run_retrieval_benchmark.py`（真實 embedding 呼叫，走 `app/services/retrieval.py` production 檢索 + `app/services/retrieval_metrics.py` 評分，題庫沿用 `spike/test_questions.json`） | `hit@1 / hit@3 / hit@5`（document-scoped 與 global 各一組）、`hybrid_matches_vector_only_order`、cross-document interference | `backend/scripts/retrieval_benchmark_report.json`（已進版控） | document-scoped `hit@1/3/5 ≈ 64% / 91% / 100%`；global `hit@3 ≈ 82%` |
+| Answer accuracy（走完整 orchestration 的最終回答） | `backend/scripts/run_answer_accuracy_benchmark.py`（對真實 `/assistant` HTTP endpoint 跑完整對話，LLM-as-a-Judge，裁判 `gpt-5.6-terra`，生成模型 `gpt-4o-mini`，題庫為 `spike/test_questions.json` 中 `retrieval_eval_eligible=true` 子集） | `correctness / groundedness / completeness`（各 1–5，取平均） | `backend/scripts/answer_accuracy_report.json`（本機執行產出，未進版控） | `correctness ≈ 3.36 / groundedness ≈ 3.29 / completeness ≈ 3.43` |
+| Groundedness gate（部署層防幻覺） | `backend/app/services/groundedness.py` + `backend/tests/test_groundedness.py`（deterministic，非 LLM 呼叫） | 每句 claim 是否被單一 evidence unit 共同佐證（單元測試 pass/fail，非分數） | 隨 backend test suite | 隨 `main` 測試套件全過 |
+| Step 13 rule 分析（battery scheduling / cost / green ops）與 Step 14 report | `backend/app/services/{battery_scheduling,cost_estimation,green_operations_index,analysis_report}.py` + `backend/tests/test_step13_*.py` + `test_step13_synthetic_integration_validation.py` | deterministic rule 輸出 + synthetic fixture 端對端驗證（pass/fail） | 隨 backend test suite | 全部 pass（含 synthetic multi-site / 缺欄位 / 空資料集情境） |
+
+下面各 Phase 若涉及上表能力，一律標成 **Current baseline** 並只描述「還缺什麼」。
+
+---
+
 # 2. 核心能力層級
 
 ## Level 1 — Model Evaluation
@@ -745,72 +768,111 @@ https://docs.nvidia.com/nemo/evaluator
 
 # Phase 5 — RAG Evaluation
 
-正式加入：
+官方 NVIDIA 參考：https://docs.nvidia.com/rag/latest/evaluate.html
+
+### Current baseline（`main` 上已實作，不要重造）
+
+| RAG 指標 | 目前怎麼量 | 狀態 |
+|---|---|---|
+| **Answer Accuracy**（correctness） | `run_answer_accuracy_benchmark.py` 的 LLM-as-a-Judge `correctness`（1–5） | ✅ Current baseline，最近 ≈ 3.36 / 5 |
+| **Groundedness** | 兩層：① `run_answer_accuracy_benchmark.py` 的 judge `groundedness`（1–5，最近 ≈ 3.29）；② 部署層的 deterministic `groundedness.py` gate（每句 claim 逐 evidence-unit 共同定位，非分數） | ✅ Current baseline |
+| **Completeness** | 同 judge，`completeness`（1–5，最近 ≈ 3.43） | ✅ Current baseline |
+| **Recall@K / hit@K** | `run_retrieval_benchmark.py` 的 `hit@1/3/5`（document-scoped 與 global），題庫 `spike/test_questions.json`，評分 `retrieval_metrics.py` | ✅ Current baseline，document-scoped ≈ 64% / 91% / 100% |
+| **Citation Correctness** | 部分覆蓋：`groundedness.py` 已把 `# Citations` 段落納入 claim 檢查（引用的頁碼／文件必須真的在本輪 evidence 內），`retrieval_metrics.py` 有 `page_correctness` / `exact_content_correctness` | ⚠️ 部分 Current baseline，尚無獨立聚合分數 |
+
+### Planned work（真正還缺的，才是本 Phase 要做的）
 
 ```text
-Answer Accuracy
-Context Relevancy
-Groundedness
-Recall@K
-Citation Correctness
+1. Context Relevancy —— 目前沒有量。需要對「撈回的 chunk 對問題是否相關」
+   做一個獨立指標（可用 judge 或 embedding 相似度門檻），不要跟 hit@K 混為一談。
+2. Citation Correctness 的獨立聚合分數 —— 把現有的 page/keyword 檢查彙整成
+   「引用正確率 = 正確引用數 / 總引用數」，納入 RAG Scorecard。
+3. 把兩支 runner 接進 CI 的可選 job（目前是手動、有 API 費用，見各腳本
+   docstring 的成本警告），並固定輸出 machine-readable 報告供 regression 比對。
+4. 對照 NVIDIA NeMo Evaluator 的 RAG metrics 命名與計算方式，確認我們的
+   correctness/groundedness/recall 定義與其一致（見 Phase 4）。
 ```
 
-官方 NVIDIA：
+### Phase 5 產出（RAG Scorecard，數字為示意格式，非目標值）
 
-https://docs.nvidia.com/rag/latest/evaluate.html
+| Metric | 來源 | 現況 |
+|---|---|---|
+| Answer Accuracy (correctness, 0–100 正規化) | judge correctness → `(x−1)/4×100` | baseline ≈ 59 |
+| Context Relevancy | Planned work | — |
+| Groundedness (0–100) | judge groundedness → `(x−1)/4×100` | baseline ≈ 57 |
+| Recall@1 / @3 / @5 | retrieval hit@K（已是 0–100） | ≈ 64 / 91 / 100 |
+| Citation Correctness | Planned work（聚合） | — |
 
-### Phase 5 產出
-
-```text
-RAG Scorecard
-```
-
-例如：
-
-| Metric | Score |
-|---|---:|
-| Answer Accuracy | 92 |
-| Context Relevancy | 88 |
-| Groundedness | 95 |
-| Recall@1 | 76 |
-| Recall@3 | 91 |
-| Recall@5 | 97 |
+> 註：上面是「格式範例 + 目前 baseline」，不是驗收目標。驗收門檻在第 12 節 Scorecard 統一定義。
 
 ---
 
-# Phase 6 — 建立自己的 Project Benchmark
+# Phase 6 — 建立自己的 Project Benchmark（EnergyOps-Bench）
 
-例如：
+**狀態**：Planned work（題庫尚未建），但**必須涵蓋 `main` 上已完成的所有 MVP 能力**，否則 model / rule / prompt 改動可能打壞已交付的功能卻不影響任何 EnergyOps-Bench 數字。
 
-```text
-EnergyOps-Bench
-```
+### 題型分佈（含 Step 13 的三項 rule 分析）
 
-可以先設計 100 題：
+| 題型 | 題數 | 對應 `main` 能力 |
+|---|---:|---|
+| Document QA | 20 | `/assistant` + RAG（`search_documents`） |
+| Fault Diagnosis | 15 | `/datasets/{id}/analysis`（`BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT`） |
+| Time-series QA | 15 | `/assistant` + dataset tools |
+| RAG Retrieval | 15 | `run_retrieval_benchmark.py` 題庫 |
+| **Battery Scheduling** | 10 | `/datasets/{id}/schedule`（`battery_scheduling_v1`） |
+| **Cost Estimation** | 5 | `/datasets/{id}/cost`（`cost_estimation_v1`） |
+| **Green Operations Index** | 5 | `/datasets/{id}/green-operations-index`（`green_operations_index_v1`） |
+| Safety / Hallucination | 5 | groundedness gate、rule safety veto |
+| Management Summary | 5 | `/datasets/{id}/report`（Step 14） |
 
-| 題型 | 題數 |
-|---|---:|
-| Document QA | 20 |
-| Fault Diagnosis | 20 |
-| Time-series | 20 |
-| RAG Retrieval | 20 |
-| Safety / Hallucination | 10 |
-| Management Summary | 10 |
-
-每個 Test Case 建議至少有：
+Test Case schema（沿用，非新增）：
 
 ```json
 {
   "id": "energy_001",
-  "category": "fault_diagnosis",
+  "category": "battery_scheduling",
+  "dataset_fixture": "scripts/synthetic_step13/…",
   "question": "...",
-  "ground_truth": "...",
-  "expected_sources": [],
+  "expected": { "...": "見下方各類別的 acceptance metric" },
   "difficulty": "medium"
 }
 ```
 
-這會逐漸演變成真正有價值的 Domain Dataset。
+### Step 13 三類的 acceptance metrics（依現有 API contract、deterministic rule 與既有測試設計，不可憑空編造）
+
+這三類的規則是 **deterministic**（`evaluate_battery_scheduling` / `evaluate_cost_estimation` / `evaluate_green_operations_index` 皆為純函式），所以對固定的 synthetic fixture，「正確輸出」是唯一且可精確比對的。已有的 `backend/tests/test_step13_*.py` 與 `test_step13_synthetic_integration_validation.py` 就是這些 metric 的參考實作。
+
+**Battery Scheduling**（`POST /datasets/{id}/schedule` → `ScheduleRunResponse`，每列 `ScheduleRecommendation`）
+
+| 檢查 | 通過條件 |
+|---|---|
+| Correct action | 每列 `action ∈ {"charge","discharge","idle","hold"}` 與 fixture 的預期值**逐列完全相等**（deterministic rule，action label 容差 = 0） |
+| Correct price class | 每列 `price_classification ∈ {"low","normal","high"}` 與預期相等 |
+| **Safety-rule violation（hard fail）** | 任一列若 `battery_temperature ≥ 40` 或 `battery_health_status == "critical"` 或 `battery_soc ≤ 20`（`SOC_SAFETY_THRESHOLD`）或 `battery_soh < 80`（`SOH_VETO_THRESHOLD`），其 `action` 必須是 `hold` 或 `idle`，**絕不可**是 `charge` / `discharge`。出現任一違反 = 整個 case FAIL，且觸發第 12 節的 safety hard gate |
+| insufficient-data 行為 | 對「所有 `_REQUIRED_COLUMNS` 皆缺」的 fixture，`evaluated_row_count == 0`，回應仍為 HTTP 200 且不誤觸任何 charge/discharge |
+
+**Cost Estimation**（`POST /datasets/{id}/cost` → `CostRunResponse`，`per_site` + `dataset_aggregate`）
+
+| 檢查 | 通過條件 |
+|---|---|
+| Energy cost 數值 tolerance | `total_energy_cost` 與 fixture 手算值（`Σ grid_import_kw × duration_hours × electricity_price`）的相對誤差 ≤ `1e-6` |
+| Arbitrage 數值 tolerance | `total_arbitrage_saving` 與手算值（放電 `+power×dur×price`、充電 `−|power|×dur×price`）相對誤差 ≤ `1e-6` |
+| Over-contract flags | `over_contract_penalty_flags` 的數量與被標記的 interval 與預期**完全一致** |
+| Multi-site 一致性 | `dataset_aggregate` 的金額 == `Σ per_site`（同 tolerance） |
+| Warning 行為 | 對「有時間缺口 / 末列不完整」的 fixture，`warnings: list[AnalysisNote]` 至少含對應 `type` 的一筆 |
+| insufficient-data 行為 | 對「零個 valid interval」的 fixture，回應 HTTP 200、金額為 0、不 crash |
+
+**Green Operations Index**（`POST /datasets/{id}/green-operations-index` → `GreenOpsRunResponse`）
+
+| 檢查 | 通過條件 |
+|---|---|
+| Component 分數界限 | 4 個 component 分數各自 ∈ `[0, max_score]`（max 分別為 `pv_utilization 25 / battery_operation 20 / grid_dependency 20 / battery_health 25`） |
+| Total 上限 | `total_score`（含 `second_life_bonus`）≤ 100 |
+| Golden fixture 數值 tolerance | 對 golden fixture，`total_score` 與手算值誤差 ≤ `0.01` |
+| insufficient-data 行為 | 對「缺 `compute_valid_intervals` 所需欄位」的 fixture，每個 component `status == "insufficient_data"` 且 `total_score is None`（不是 0） |
+| Second-life bonus 條件 | `second_life_bonus` 只有在重用的 `BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT` 規則判定 eligible 且無 safety veto 時才 > 0 |
+
+> 這三類的 fixture 直接沿用 `scripts/synthetic_step13/` 既有合成資料 + `backend/tests/test_step13_*` 的斷言，EnergyOps-Bench 只是把它們包成統一 case 格式並納入 regression 報告，不是重寫規則測試。
 
 ---
 
@@ -913,11 +975,23 @@ FAIL
 
 即使 Overall Score 較高，也不能直接 deployment。
 
+### Regression suite 的最低覆蓋（對齊 `main` 現況）
+
+當這套 suite 被當成本專案的 regression gate，它**必須**包含：
+
+- Phase 5 的 Current baseline 兩支 runner（retrieval hit@K、answer-accuracy judge 分數）
+- Phase 6 EnergyOps-Bench 的**全部**題型，特別是 Step 13 三類（Battery Scheduling / Cost Estimation / Green Operations Index）—— 這三項的 API 與 dashboard 已在 `main` 完成，若 regression suite 不含它們，rule / model 改動可能打壞已交付功能卻不被偵測
+- 第 12.3 的三條 hard gate（groundedness 下限、EnergyOps-Bench safety-rule violations == 0、hard-gated metric 退步 > 5 分）；任一觸發即 FAIL，不看總分
+
+Step 13 三類因為是 deterministic rule，regression 判定用「輸出與 fixture 預期逐項相等 / 數值 tolerance」，不是分數比較（見 Phase 6 的 acceptance metrics）。
+
 ---
 
-# Phase 10 — AI Evaluation Lab / EvalCore
+# Phase 10 — AI Evaluation Lab / EvalCore  ·  **Non-MVP reference**
 
-最終架構：
+> **範圍界定**：本 Phase 描述的「AI Evaluation Lab / EvalCore」是一個**獨立的未來 portfolio 專案**，不是 AI Energy Operations Copilot 這個 repo 的一部分。它**不是本專案的 acceptance gate，不得阻擋 MVP v1 的完成判定**。放在這裡只作為長期方向參考；本專案實際要交付的評測範圍以 Phase 5 / Phase 6 / Phase 9 的 **Planned work** 為準。
+
+最終架構（EvalCore 專案的願景，非本 repo 待辦）：
 
 ```text
              AI Evaluation Lab
@@ -966,30 +1040,59 @@ Quality Gate
 | Cost | 71 | 69 | 95 |
 | Reliability | 91 | 94 | 90 |
 
-最後不是單純算平均。
+最後不是單純算平均，而是走一套**可重現**的計分：相同輸入一定得到相同決策。
 
-而是依 Project Requirement 加權，例如：
+### 12.1 每個 raw metric 正規化到共同的 0–100 sub-score
+
+| Metric 類型 | 例子 | 方向 | 正規化公式 |
+|---|---|---|---|
+| Judge 1–5 分 | correctness / groundedness / completeness | 越高越好（benefit） | `sub = (raw − 1) / 4 × 100` |
+| 已是百分比 | hit@K、citation correctness、domain action 正確率 | 越高越好（benefit） | `sub = raw`（clamp 到 0–100） |
+| Latency（p95, ms） | `/assistant` 端對端 p95 | 越低越好（cost 面） | `sub = clamp(0, 100, 100 × (L_budget − p95) / (L_budget − L_target))` |
+| Cost（USD / 100 evaluated turns） | 見第 14 節成本計算 | 越低越好（cost 面） | `sub = clamp(0, 100, 100 × (C_budget − cost) / (C_budget − C_target))` |
+| Reliability | 1 − (失敗數 / 總數) | 越高越好（benefit） | `sub = raw × 100` |
+
+`L_target / L_budget`、`C_target / C_budget` 是每次評測前在 config 明確填的門檻值（target = 理想、budget = 可接受上限），不寫死在文件裡。
+
+- **Benefit metrics**（sub 越高越好）：RAG Accuracy、Groundedness、Domain Accuracy、Reliability、hit@K、Citation Correctness。
+- **Cost/latency metrics**（raw 越低 → sub 越高）：p95 latency、USD / 100 turns。
+
+### 12.2 加權總分
 
 ```text
-EnergyOps:
-
-RAG Accuracy       30%
-Groundedness       20%
-Domain Accuracy    20%
-Latency            10%
-Cost               10%
-Reliability        10%
+weighted_total = Σ ( weight_i × sub_score_i ) ，其中 Σ weight_i = 100
 ```
 
-最後產出：
+EnergyOps 權重（可依專案調整，但必須加總為 100）：
 
 ```text
-Recommendation
-
-ADOPT
-CONDITIONAL
-REJECT
+RAG Accuracy       30
+Groundedness       20
+Domain Accuracy    20
+Latency            10
+Cost               10
+Reliability        10
 ```
+
+### 12.3 Hard gates（任一不過 ⇒ 直接 REJECT，不看 weighted_total）
+
+```text
+1. Groundedness sub-score ≥ 60           （≈ judge 3.4 / 5；低於此代表防幻覺不合格）
+2. EnergyOps-Bench safety-rule violations == 0
+   （Battery Scheduling 在 temp≥40 / health=critical / SOC≤20 / SOH<80 時
+    出現 charge/discharge 即為 violation）
+3. 相對 baseline，任一 hard-gated metric 的 sub-score 退步 > 5 分
+```
+
+### 12.4 決策門檻（hard gates 全過之後，看 weighted_total）
+
+| weighted_total | Recommendation |
+|---|---|
+| ≥ 80 | **ADOPT** |
+| 65 – 79 | **CONDITIONAL**（必須附「要補什麼才能升到 ADOPT」的具名條件） |
+| < 65，或任一 hard gate 不過 | **REJECT** |
+
+> 關鍵性質：給定同一份 metrics 與同一份 config（權重、target/budget），12.1–12.4 是純函式 —— 兩個人算出的 `weighted_total` 與 Recommendation 必定相同。
 
 ---
 
@@ -1162,21 +1265,13 @@ at THIS cost?
 
 ---
 
-# 16. 建議長期專案名稱
+# 16. 建議長期專案名稱  ·  **Non-MVP reference**
 
-暫定：
+> 本節與第 15 節之後的內容都屬 **Non-MVP reference**：是「evaluation 能力長成一個獨立專案」後的命名與範圍構想，**不是 AI Energy Operations Copilot repo 的待辦，也不阻擋本專案完成**。
 
-```text
-EvalCore
-```
+暫定：`EvalCore` 或 `AI Evaluation Lab`。
 
-或：
-
-```text
-AI Evaluation Lab
-```
-
-未來可以逐步包含：
+未來（獨立專案內）可以逐步包含：
 
 ```text
 Model Evaluation
@@ -1191,14 +1286,27 @@ Quality Gates
 Dashboard
 ```
 
-最終它可以成為一個獨立的 Portfolio Project，也可以作為其他 AI 專案共用的 Evaluation Infrastructure。
+它會是一個**獨立的 Portfolio Project**，可作為其他 AI 專案共用的 Evaluation Infrastructure —— 但那是另一個 repo 的事，本專案的評測交付範圍以 Phase 5 / 6 / 9 的 Planned work 為界。
 
 ---
 
-## 補充（Claude Code 審閱建議，2026-07-27）
+## 補充（Claude Code 審閱建議，2026-07-27；2026-09-07 依 Codex review 修訂）
+
+> 2026-09-07 修訂：此 roadmap 原稿寫於 Step 13 / Step 14 與 PR #70（answer-accuracy / groundedness hardening）完成之前，部分「待新增」的評測其實已在 `main` 實作。本次修訂：① 第 1a 節加入 Current baseline / Planned work / Non-MVP reference 三態標記；② Phase 5 區分已實作 baseline 與真正缺口；③ Phase 6 EnergyOps-Bench 補上 Step 13 三類與其 acceptance metrics（依現有 deterministic rule / API contract / 既有測試）；④ 第 12 節 Scorecard 補上正規化公式、hard gates 與 ADOPT/CONDITIONAL/REJECT 門檻；⑤ 下方第 2 點的 chat 成本估算改為依 runner 記錄的 token usage 計算；⑥ Phase 10 與第 16 節明確標為 Non-MVP reference。
 
 以下是套用在 `AI Energy Operations Copilot (MVP_V1)` 時的具體修正建議：
 
-1. **`EnergyOps-Bench` 不用從零寫 100 題**：先重用 `spike/test_questions.json`（29 題，已有真實 retrieval baseline 數字）、`chunking_comparison_report.json`、`retrieval_benchmark_report.json` 當作 Phase 2/6 的第一批測試集，站在既有驗證基礎上，而不是重工。
-2. **成本控制**：Phase 2 的 AI Battle 與 LLM-as-a-Judge 都會真的呼叫付費 API，建議每次跑評測前先用專案既有的 `embed-cost-estimate` skill 估算花費。
-3. **定位**：此文件是長期參考地圖，實際教學仍照 Phase 1 → 2 → 3 逐步走，不要被 Phase 4-10 的規模嚇到或想跳著做。
+1. **`EnergyOps-Bench` 不用從零寫 100 題**：先重用 `spike/test_questions.json`（29 題，已有真實 retrieval baseline 數字）、`chunking_comparison_report.json`、`retrieval_benchmark_report.json` 當作 Phase 5/6 的第一批測試集，站在既有驗證基礎上，而不是重工。Step 13 三類（battery scheduling / cost / green ops）則沿用 `scripts/synthetic_step13/` 的合成 fixture 與 `backend/tests/test_step13_*` 的斷言。
+2. **Chat / Judge 評測的成本計算（不要用 `embed-cost-estimate` skill）**：`.claude/skills/embed-cost-estimate` 只解析 PDF 並用 `text-embedding-3-small` 的 ingestion token 計價，**不含 chat 的 input/output token，也沒有 generation／judge 模型的價格**，拿來估 AI Battle / LLM-as-a-Judge 的花費會嚴重低估。正確做法：
+
+   ```text
+   cost_per_model = input_tokens  / 1_000_000 × input_price_per_1M
+                  + output_tokens / 1_000_000 × output_price_per_1M
+
+   total_cost = cost(evaluated_model) + cost(judge_model)   # 兩個模型分開算再相加
+   ```
+
+   - `input_tokens` / `output_tokens` 取自 **runner 實際記錄的 per-call usage**（OpenAI response 的 `usage` 物件；`run_answer_accuracy_benchmark.py` 若尚未持久化 usage，補一個「把每次呼叫的 usage 寫進報告」的小改動 —— 屬 Planned work），**不要**用 PDF 重新估算。
+   - 單價由**執行時參數**或**附日期的設定檔**提供（例如 `eval/model_prices.2026-09-07.json`），**不要把易過期的價格寫死在程式碼或這份文件裡**。
+   - 事前概估（還沒有 usage 時）：用「每題平均 input/output token × 題數」粗估，並在報告標明是估算值。
+3. **定位**：此文件是長期參考地圖。Phase 1 → 3 是實際教學路線；Phase 4 起若標 **Current baseline** 表示已在 `main` 可執行、只補缺口，標 **Non-MVP reference**（如 Phase 10、第 16 節）則是獨立專案願景、不阻擋本專案完成。
