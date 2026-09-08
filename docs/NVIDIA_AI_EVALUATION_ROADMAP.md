@@ -135,9 +135,9 @@ Adopt / Conditional / Reject
 
 | 能力 | 實作 | 產出的指標 | 報告位置 | 最近一次記錄的數字 |
 |---|---|---|---|---|
-| Retrieval quality | `backend/scripts/run_retrieval_benchmark.py`（真實 embedding 呼叫，走 `app/services/retrieval.py` production 檢索 + `app/services/retrieval_metrics.py` 評分，題庫沿用 `spike/test_questions.json`） | `hit@1 / hit@3 / hit@5`（document-scoped 與 global 各一組）、`hybrid_matches_vector_only_order`、cross-document interference | `backend/scripts/retrieval_benchmark_report.json`（已進版控） | document-scoped `hit@1/3/5 ≈ 64% / 91% / 100%`；global `hit@3 ≈ 82%` |
-| Answer accuracy（走完整 orchestration 的最終回答） | `backend/scripts/run_answer_accuracy_benchmark.py`（對真實 `/assistant` HTTP endpoint 跑完整對話，LLM-as-a-Judge，裁判 `gpt-5.6-terra`，生成模型 `gpt-4o-mini`，題庫為 `spike/test_questions.json` 中 `retrieval_eval_eligible=true` 子集） | `correctness / groundedness / completeness`（各 1–5，取平均） | `backend/scripts/answer_accuracy_report.json`（本機執行產出，未進版控） | `correctness ≈ 3.36 / groundedness ≈ 3.29 / completeness ≈ 3.43` |
-| Groundedness gate（部署層防幻覺） | `backend/app/services/groundedness.py` + `backend/tests/test_groundedness.py`（deterministic，非 LLM 呼叫） | 每句 claim 是否被單一 evidence unit 共同佐證（單元測試 pass/fail，非分數） | 隨 backend test suite | 隨 `main` 測試套件全過 |
+| Retrieval quality | `backend/scripts/run_retrieval_benchmark.py`（真實 embedding 呼叫，走 `app/services/retrieval.py` production 檢索 + `app/services/retrieval_metrics.py` 評分，題庫沿用 `spike/test_questions.json`） | `hit@1 / hit@3 / hit@5`、`hybrid_matches_vector_only_order`、cross-document interference | `backend/scripts/retrieval_benchmark_report.json`（已進版控） | document-scoped `hit@1/3/5 ≈ 53.8% / 92.3% / 100%`（single-chunk 13 題，見 §12.3 的 `hit@k` 定義） |
+| Answer accuracy（走完整 orchestration 的最終回答） | `backend/scripts/run_answer_accuracy_benchmark.py`（跑真實的 conversation/message API：`POST /conversations` → `POST /conversations/{conversation_id}/messages`（SSE）→ 讀 messages collection；**`/assistant` 是前端頁面路由、不是 FastAPI endpoint**。LLM-as-a-Judge，裁判 `gpt-5.6-terra`，生成模型 `gpt-4o-mini`，題庫為 `spike/test_questions.json` 中 `retrieval_eval_eligible=true` 子集） | `correctness / groundedness / completeness`（各 1–5，取平均） | `backend/scripts/answer_accuracy_report.json`（本機執行產出，未進版控） | `correctness ≈ 3.36 / groundedness ≈ 3.29 / completeness ≈ 3.43` |
+| Groundedness gate（部署層防幻覺，high-risk-fact floor） | `backend/app/services/groundedness.py` + `backend/tests/test_groundedness.py`（deterministic，非 LLM 呼叫） | evidence-bound 段落中可抽取的數字 / labeled-name claim 是否被單一 evidence unit 共同佐證（pass/fail，非分數；**不涵蓋定性捏造**） | 隨 backend test suite | 隨 `main` 測試套件全過 |
 | Step 13 rule 分析（battery scheduling / cost / green ops）與 Step 14 report | `backend/app/services/{battery_scheduling,cost_estimation,green_operations_index,analysis_report}.py` + `backend/tests/test_step13_*.py` + `test_step13_synthetic_integration_validation.py` | deterministic rule 輸出 + synthetic fixture 端對端驗證（pass/fail） | 隨 backend test suite | 全部 pass（含 synthetic multi-site / 缺欄位 / 空資料集情境） |
 
 下面各 Phase 若涉及上表能力，一律標成 **Current baseline** 並只描述「還缺什麼」。
@@ -775,9 +775,9 @@ https://docs.nvidia.com/nemo/evaluator
 | RAG 指標 | 目前怎麼量 | 狀態 |
 |---|---|---|
 | **Answer Accuracy**（correctness） | `run_answer_accuracy_benchmark.py` 的 LLM-as-a-Judge `correctness`（1–5） | ✅ Current baseline，最近 ≈ 3.36 / 5 |
-| **Groundedness** | 兩層：① `run_answer_accuracy_benchmark.py` 的 judge `groundedness`（1–5，最近 ≈ 3.29）；② 部署層的 deterministic `groundedness.py` gate（每句 claim 逐 evidence-unit 共同定位，非分數） | ✅ Current baseline |
+| **Groundedness** | 兩層：① `run_answer_accuracy_benchmark.py` 的 judge `groundedness`（1–5，最近 ≈ 3.29）；② 部署層的 deterministic `groundedness.py` **high-risk-fact floor**（只查 evidence-bound 段落中可抽取的數字與 labeled-name claim；非分數，且**不攔截所有 qualitative fabrication**） | ✅ Current baseline（floor，非全面 groundedness scorer） |
 | **Completeness** | 同 judge，`completeness`（1–5，最近 ≈ 3.43） | ✅ Current baseline |
-| **Recall@K / hit@K** | `run_retrieval_benchmark.py` 的 `hit@1/3/5`（document-scoped 與 global），題庫 `spike/test_questions.json`，評分 `retrieval_metrics.py` | ✅ Current baseline，document-scoped ≈ 64% / 91% / 100% |
+| **Recall@K / hit@K** | `run_retrieval_benchmark.py` 的 `hit@1/3/5`（document-scoped），題庫 `spike/test_questions.json`，評分 `retrieval_metrics.py` | ✅ Current baseline，document-scoped ≈ 53.8% / 92.3% / 100%（single-chunk 13 題） |
 | **Citation Correctness** | 部分覆蓋：`groundedness.py` 已把 `# Citations` 段落納入 claim 檢查（引用的頁碼／文件必須真的在本輪 evidence 內），`retrieval_metrics.py` 有 `page_correctness` / `exact_content_correctness` | ⚠️ 部分 Current baseline，尚無獨立聚合分數 |
 
 ### Planned work（真正還缺的，才是本 Phase 要做的）
@@ -800,7 +800,7 @@ https://docs.nvidia.com/nemo/evaluator
 | Answer Accuracy (correctness, 0–100 正規化) | judge correctness → `(x−1)/4×100` | baseline ≈ 59 |
 | Context Relevancy | Planned work | — |
 | Groundedness (0–100) | judge groundedness → `(x−1)/4×100` | baseline ≈ 57 |
-| Recall@1 / @3 / @5 | retrieval hit@K（已是 0–100） | ≈ 64 / 91 / 100 |
+| Recall@1 / @3 / @5 | retrieval hit@K（已是 0–100） | ≈ 53.8 / 92.3 / 100 |
 | Citation Correctness | Planned work（聚合） | — |
 
 > 註：上面是「格式範例 + 目前 baseline」，不是驗收目標。驗收門檻在第 12 節 Scorecard 統一定義。
@@ -826,15 +826,15 @@ https://docs.nvidia.com/nemo/evaluator
 | **Battery Scheduling** | Implemented + measurable | deterministic：對固定 fixture，每列 `action`／`price_classification` 與 rule 輸出逐列相等（容差 0）。**Safety**：`temperature` / `health_status` 觸發 blanket 安全覆寫的列，`action` 不得是 charge 或 discharge（rule 回 idle）；`battery_soc` / `battery_soh` 觸發 discharge veto 的列，`action` 不得是 discharge（充電條件成立時回 charge 是正確的）。任一 blanket-safety 列出現 charge/discharge、或任一 discharge-veto 列出現 discharge = safety violation（→ §12.3 Gate B）。缺全部必要欄位的列回 `hold` + insufficient-row warning。 | `backend/app/services/battery_scheduling.py`（`_build_recommendation` Step 1–5、`TEMPERATURE_SAFETY_THRESHOLD` / `SOC_SAFETY_THRESHOLD` / `SOH_VETO_THRESHOLD`）、`price_classification.py` `classify_price` | 直接沿用 `test_step13_integration.py`、`test_low_soc_with_charge_condition_charges`、`test_soh_low_with_charge_condition_charges` 的斷言 |
 | **Cost Estimation** | Implemented + measurable | deterministic：`total_energy_cost` / `total_arbitrage_saving`（per-site 與 `dataset_aggregate`）對 fixture 手算值滿足共用 tolerance（見下）；`dataset_aggregate` 為各 site 直接相加。over-contract flag 的數量與位置與 rule 輸出一致。**Note 分流**：末列不完整 → `limitations`（`AnalysisNote.type == "last_row_excluded"`）；真正的時間缺口 → `warnings`。零 valid interval 的 fixture 回 HTTP 200、金額 0.0、不 raise。 | `backend/app/services/cost_estimation.py`（`_evaluate_site`、`_aggregate_sites`；`limitations` / `warnings` 分流依 `note.type`） | 直接沿用 `test_step13_integration.py`、`test_last_row_excluded_reported_as_limitation_not_warning` |
 | **Green Operations Index** | Implemented + measurable | deterministic：component `status == "computed"` 時 `score` ∈ `[0, max_score]`；`status == "insufficient_data"` 時 `score` 為 `None`（即使該 site 有 valid interval，只是缺該 component 的輸入）。`total_score` 缺料時為 `None`（不是 0），有值時對 golden fixture 滿足共用 tolerance 且不超過各 max 加總 + bonus 上限。**Second-life bonus**：所有條件只量化 `_evaluate_site` 傳給 `_compute_second_life_bonus` 的 **eligible interval-start rows**（`pd.DataFrame(start_rows)`）；被排除的末列 / invalid interval 資料不影響 expected bonus。三態（`0.0` / `10.0` / `None`，加上「沒有 second-life 列」「缺必要欄位」）以 `_compute_second_life_bonus` docstring 為準。 | `backend/app/services/green_operations_index.py`（`COMPONENT_MAX_SCORES`、`_score_component`（`eligible_duration == 0` → `score=None, status="insufficient_data"`）、`_sum_total_score`、`_compute_second_life_bonus`、`_evaluate_site` 的 `start_rows`）、`schemas.py` `GreenOpsComponentScore` | 直接沿用 `test_step13_integration.py`、`test_green_ops_total_score_none_reads_as_insufficient_data`、`test_missing_component_columns_is_insufficient_data_and_nulls_total` |
-| **Fault Diagnosis** | Implemented + measurable | deterministic：對固定 dataset fixture，`GET/POST /datasets/{id}/analysis` 的 flagged 列集合、`operator_action`、severity 與 `BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT` 規則輸出一致；缺料 / 零 flagged 的情境回應正確、不誤報。 | `backend/app/services/rule_engine.py`（`BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT`）、`backend/app/main.py` `/datasets/{id}/analysis` | 直接沿用 `test_analysis_endpoint.py` 的斷言 |
+| **Fault Diagnosis** | Implemented + measurable | deterministic：對固定 dataset fixture，`GET/POST /datasets/{id}/analysis` 的 `flagged` 列集合正確、`severity == "warning"`、`suggested_actions == list(SUGGESTED_ACTIONS)`、`flagged_row_count` 與集合一致；缺料 / 零 flagged 情境不誤報。（無 `operator_action` 欄位 —— 那是 case 相關的欄位。） | `backend/app/services/rule_engine.py`（`BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT`、`SUGGESTED_ACTIONS`）、`schemas.py` `AnomalyResult`、`backend/app/main.py` `/datasets/{id}/analysis` | `test_analysis_endpoint.py`（現有斷言涵蓋 flagged / severity / count；**尚未斷言 `suggested_actions`** —— 補這條 scorer/test assertion 屬 Planned implementation，本 docs-only PR 不改 backend test） |
 | **CSV Ingestion** | Implemented + measurable | `POST /datasets/upload`：canonical enum（`ems_mode` / `equipment_status`）合法值不產生 warning；大小寫 / 空白正規化；非法 enum 產生 warning 並存為 `unknown`；timestamp / 數值 / `battery_health_status` 驗證維持；資料以 batch insert 寫入 `datasets` / `energy_timeseries`。 | `backend/app/ingestion.py`（`parse_and_validate_csv`、canonical enum sets）、`backend/app/main.py` `POST /datasets/upload` | 直接沿用 `test_ingestion.py`、`test_datasets_api.py`、`test_datasets_queries.py` |
 | **Case Similarity** | Implemented + measurable | 對固定 query / `case_id`，已知最相關的 seed case 出現在回傳 top-k 內；結果依 `final_score` 遞減排序；`confidence` / `case_similarity` label 與其分數落在對應 bucket 自洽（threshold 在程式碼標 PROVISIONAL，只查自洽）；回應不含 `root_cause` / `operator_action` / `resolution_result`。**回傳筆數**：`POST /cases/search` → `min(top_k, seeded_case_count)`；`GET /cases/{case_id}/similar` → `min(top_k, seeded_case_count − 1)`（`find_similar_to_case` 會先移除 query case 本身）；`top_k` 超出允許範圍 → HTTP 422。 | `backend/app/services/case_similarity.py`（`score_candidates`、`confidence_for_score`、`case_similarity_label`、`CONFIDENCE_THRESHOLDS` / `CASE_SIMILARITY_THRESHOLDS`）、`case_retrieval.py`（`find_similar_to_case` 排除 query case）、`schemas.py`（`CaseSearchResult`、`CaseSearchRequest.top_k`）、`scripts/seed_case_records.py` | 直接沿用 `test_cases_api.py` |
 | **Management Summary** | Implemented + measurable | `rule_version` 與 6 個 section `key` 齊全；`ReportSection.status` 為 schema 定義的其中一個值；`dataset_overview` → `included`、`similar_cases` → `manual_lookup`；`anomaly_diagnosis` / `battery_schedule` / `cost_estimate` / `green_operations_index` 四者：sub-analysis 有跑 → `included`，否則 → `not_run` + 非空 `note`。**Provenance 只套用在這四個 sub-analysis section**：`included` 時 `source_analysis_run_id` 非 None 且 `source_created_at` == 該 sub-run 建立時間；`dataset_overview` 即使 `included`，其 provenance 欄位仍為 `None`（`_dataset_overview_section` 刻意不填）。`limitations.kind` 為 schema 定義的其中一個值。空資料集不 raise、`row_count == site_count == 0`；green-ops `total_score is None` 時該 section 仍 `included` 但 summary 標示資料不足。 | `backend/app/services/analysis_report.py`（`RULE_VERSION`、`SECTION_*`、`_dataset_overview_section` provenance 留 None、`_not_run_section`）、`schemas.py`（`ReportSection`、`ReportLimitation.kind`） | 直接沿用 `test_analysis_report.py`（`test_all_sub_analyses_present_all_sections_included`、`test_no_sub_analyses_only_overview_included_rest_not_run`、`test_partial_only_anomaly_present`、`test_empty_dataset_does_not_raise_and_reports_zero_rows`、`test_green_ops_total_score_none_reads_as_insufficient_data`） |
 | **RAG Retrieval** | Implemented + measurable | `hit@k`（見 §12.3 對 `hit@k` 的定義）由 `run_retrieval_benchmark.py` 對 `spike/test_questions.json` 產出。 | `backend/scripts/run_retrieval_benchmark.py`、`retrieval_metrics.py` | runner 已存在（手動執行，有 API 費用）；aggregate 由 per-question `hit_rank` 計算 |
 | **Document QA / Answer Accuracy** | Implemented + measurable | judge `correctness` / `groundedness` / `completeness`（1–5）由 `run_answer_accuracy_benchmark.py` 對 `spike/test_questions.json` 中 `retrieval_eval_eligible` 子集產出。 | `backend/scripts/run_answer_accuracy_benchmark.py` | runner 已存在（手動執行，有 API 費用） |
-| **Safety / Hallucination** | Implemented + measurable | deterministic gate：`groundedness.py` 對草稿的每句 claim 逐 evidence-unit 共同定位（pass/fail）。 | `backend/app/services/groundedness.py` | 直接沿用 `test_groundedness.py` |
+| **Safety / Hallucination** | Implemented + measurable（floor only） | implemented **high-risk-fact floor**：`groundedness.py` 只檢查 evidence-bound sections 中可抽取的 numeric 與 labeled-name claim（pass/fail）。**不能攔截所有 qualitative fabrication**；完整 semantic groundedness scorer 為 **Planned**，在它就緒前不得把本能力標成全面 measurable。 | `backend/app/services/groundedness.py`（module docstring 已聲明其為 floor、抓不到定性錯誤） | 直接沿用 `test_groundedness.py`（涵蓋 floor 的行為，非定性正確性） |
 | **Role / Persona Behavior** | Planned（部分 instrumentation 未就緒） | 對同一 assistant fixture，四種 `role_mode` 各跑一次，斷言**不變量**（不要求逐字相同）：① 提供給模型的 tool schemas（`_tools_for_turn`）與 capability-guard 判定（`looks_like_diagnostic_question`）在四種 mode 下相同；② 每一條實際產生的 claim 都通過 groundedness gate；③ terminal outcome 等於 fixture 宣告的 `expected_terminal_outcome`（見下方「Terminal outcome」）；④ 產生七段式標題；⑤ 非 Literal `role_mode` → HTTP 422。**允許**差異：語氣、深度、資訊密度、引用的有據事實數量、在同一組 eligible 工具中實際選用的子集。**未就緒**：目前的 chat runner 不持久化 `finish_reason` / `status`，②③ 需要新的 runner instrumentation（Planned）。 | `backend/app/main.py`（`ROLE_MODE_FRAMING` 只加 framing、不進 `_tools_for_turn` / capability guard；`_SEVEN_PART_INSTRUCTION`）、`schemas.py` `RoleMode = Literal[...]` | Planned：不計入 current baseline |
-| **Time-series QA** | Planned | 未來 runner 應：使用 dataset fixtures、經 `/assistant` 呼叫 dataset tools、比對「模型回答中的數值 / 聚合結果」對 fixture 的預期。精確 pass 條件於 runner 實作時、對當時的 `main` contract 定案。**現況**：沒有 compatible runner（`run_answer_accuracy_benchmark.py` 只處理文件檢索題，不適用），不計入 current pass rate。 | 未來 runner + 屆時的 `test_datasets_api.py` / dataset-tool 斷言 | Planned：不計入 current baseline |
+| **Time-series QA** | Planned | 未來 runner 應：使用 dataset fixtures、經 conversation/message API（`POST /conversations/{id}/messages`）觸發 dataset tools、比對「模型回答中的數值 / 聚合結果」對 fixture 的預期。精確 pass 條件於 runner 實作時、對當時的 `main` contract 定案。**現況**：沒有 compatible runner（`run_answer_accuracy_benchmark.py` 只處理文件檢索題，不適用），不計入 current pass rate。 | 未來 runner + 屆時的 `test_datasets_api.py` / dataset-tool 斷言 | Planned：不計入 current baseline |
 
 > 上表中每個 **Planned** 項在 EnergyOps-Bench 實際建置前，只定義形狀與 source of truth；精確 pass 條件於實作時對當時的 test 定案，不在本 roadmap 預先寫死。
 
@@ -1037,8 +1037,8 @@ Quality Gate
 |---|---|---|---|
 | Judge 1–5 分 | correctness / groundedness / completeness | 越高越好（benefit） | `sub = (raw − 1) / 4 × 100` |
 | 已是百分比 | hit@K、citation correctness、domain action 正確率 | 越高越好（benefit） | `sub = raw`（clamp 到 0–100） |
-| Latency（p95, ms） | `/assistant` 端對端 p95 | 越低越好（cost 面） | `sub = clamp(0, 100, 100 × (L_budget − p95) / (L_budget − L_target))` |
-| Cost（USD / 100 evaluated turns） | 見第 14 節成本計算 | 越低越好（cost 面） | `sub = clamp(0, 100, 100 × (C_budget − cost) / (C_budget − C_target))` |
+| Latency（p95, ms） | conversation/message flow（`POST /conversations/{id}/messages` SSE）端對端 p95，**非**前端 `/assistant` 頁面載入 | 越低越好（cost 面） | `sub = clamp(0, 100, 100 × (L_budget − p95) / (L_budget − L_target))` |
+| Cost（USD / 100 evaluated turns） | 見 §12.1a 的 `usd_per_100_evaluated_turns` 定義 | 越低越好（cost 面） | `sub = clamp(0, 100, 100 × (C_budget − cost) / (C_budget − C_target))` |
 | Reliability | 1 − (失敗數 / 總數) | 越高越好（benefit） | `sub = raw × 100` |
 
 `L_target / L_budget`、`C_target / C_budget` 是每次評測前在 config 明確填的門檻值（target = 理想、budget = 可接受上限），不寫死在文件裡。
@@ -1054,11 +1054,23 @@ Quality Gate
 | RAG Accuracy | `answer_correctness_sub` | `run_answer_accuracy_benchmark.py` 的 `averages.correctness`（1–5） | `sub = (raw − 1) / 4 × 100` | benefit | 未產生 → `NOT_EVALUATED` |
 | Groundedness | `groundedness_sub` | 同上 `averages.groundedness`（1–5） | `sub = (raw − 1) / 4 × 100` | benefit | 未產生 → `NOT_EVALUATED` |
 | Domain Accuracy | `energyops_deterministic_pass_rate` | Phase 6 中 Status = `Implemented + measurable` 的 deterministic 類別（Battery Scheduling / Cost / Green Ops / Fault Diagnosis / CSV Ingestion / Case Similarity / Management Summary）之 fixture 通過率 | `sub = 100 × pass / total`（deterministic，理想 100） | benefit | 任一必要類別未跑 → `NOT_EVALUATED` |
-| Latency | `p95_latency_sub` | 該次 benchmark run 的 `/assistant` 端對端 p95（ms） | `sub = clamp(0, 100, 100 × (L_budget − p95) / (L_budget − L_target))` | cost 面 | 未量測 → `NOT_EVALUATED` |
-| Cost | `cost_sub` | 該次 run 的 USD / 100 evaluated turns（見 §14 計算） | `sub = clamp(0, 100, 100 × (C_budget − cost) / (C_budget − C_target))` | cost 面 | 未量測 → `NOT_EVALUATED` |
+| Latency | `p95_latency_sub` | 該次 run 的 conversation/message flow（`POST /conversations/{id}/messages` SSE）端對端 p95（ms）；非前端 `/assistant` page-load | `sub = clamp(0, 100, 100 × (L_budget − p95) / (L_budget − L_target))` | cost 面 | 未量測 → `NOT_EVALUATED` |
+| Cost | `cost_sub` | `usd_per_100_evaluated_turns`（見下方定義；**不是**整次 run 的 total spend） | `sub = clamp(0, 100, 100 × (C_budget − cost) / (C_budget − C_target))` | cost 面 | 未量測或 `evaluated_turn_count == 0` → `NOT_EVALUATED` |
 | Reliability | `reliability_sub` | 該次 run 的 `1 − (message status 為 failed/aborted 的數 / 總 assistant turn 數)` | `sub = raw × 100` | benefit | 未量測 → `NOT_EVALUATED` |
 
 任一 canonical metric 為 `NOT_EVALUATED`：不計算完整 `weighted_total`，Recommendation 不得 `ADOPT`（見 §12.4）。
+
+**`usd_per_100_evaluated_turns` 定義**（`cost_sub` 只接收此 normalized value，不接收整次 run 的 total spend）：
+
+```text
+usd_per_100_evaluated_turns = 100 × total_cost_usd / evaluated_turn_count
+```
+
+- `evaluated_turn_count` = 實際完成評分的 assistant turn 數。
+- **skipped turn**：不計入分母，也不計入 `total_cost_usd`。
+- **retry**：其 generation / judge token 成本全部計入 `total_cost_usd`，但該 logical turn 在分母只算一次。
+- `total_cost_usd` = 依文末「補充」第 2 點的公式（evaluated model + judge model 各自 `input_tokens/1M × input_price + output_tokens/1M × output_price`）加總。
+- `evaluated_turn_count == 0` → `NOT_EVALUATED`（不除以零、不產生 score）。
 
 ### 12.2 加權總分
 
@@ -1096,18 +1108,28 @@ Reliability        10
 |---|---|---|---|
 | `answer_correctness_sub` | 越高越好 | `run_answer_accuracy_benchmark.py` 上一次記錄的 `averages.correctness`，經 §12.1a 正規化 | 5（sub-score 分） |
 | `groundedness_sub` | 越高越好 | 同上 `averages.groundedness`，經正規化 | 3（更嚴，防幻覺） |
-| `retrieval_hit_at_1` | 越高越好 | 由 `retrieval_benchmark_report.json` 的 **per-question** 結果計算（見下方 `hit@k` 定義），document-scoped | 8（百分點；hit@1 波動大，容忍略寬） |
-| `retrieval_hit_at_3` | 越高越好 | 同上，document-scoped | 5（百分點） |
+| `retrieval_hit_at_1` | 越高越好 | 由 `retrieval_benchmark_report.json` 的 `document_scoped.results[*].hybrid.hit_rank`（single-chunk 13 題）依下方 `hit@k` 定義計算；checked-in baseline ≈ 53.8% | 8（百分點；hit@1 波動大，容忍略寬） |
+| `retrieval_hit_at_3` | 越高越好 | 同上；checked-in baseline ≈ 92.3% | 5（百分點） |
 | `energyops_deterministic_pass_rate` | 越高越好 | 上一次 baseline 執行（deterministic，理想 100%） | 0（deterministic，不容退步） |
 
 **`hit@k` 定義**（`retrieval_benchmark_report.json` 沒有 aggregate `hit_at_k` 欄位，需自算）：
 
+- canonical path：`document_scoped.results[*].hybrid.hit_rank`
+- population：具有 single-chunk hybrid grading 的 **13 題**。排除 false-positive-only 的 q05 / q13，以及走 multi-chunk 指標的 q20 / q24；不存在 `hybrid.hit_rank` 的題目**不算入分母、也不算成 miss**。
+
 ```text
-eligible_questions = 報告內的題目 − excluded_questions
-hit@k = 100 × count( eligible q 的 hit_rank <= k ) / count( eligible_questions )
+hit@k = 100 × count( hybrid.hit_rank <= k ) / 13
 ```
 
-> 若希望 `run_retrieval_benchmark.py` 直接輸出 `document_scoped.hit_at_1 / hit_at_3` aggregate 欄位以省去自算，列為 **Planned work**；在那之前一律由 per-question `hit_rank` 計算。
+checked-in baseline（此版報告）：
+
+```text
+hit@1 = 7/13  = 53.8%
+hit@3 = 12/13 = 92.3%
+hit@5 = 13/13 = 100%
+```
+
+> 若希望 `run_retrieval_benchmark.py` 直接輸出 `document_scoped.hit_at_1 / hit_at_3` aggregate 欄位以省去自算，列為 **Planned work**；在那之前一律由上式的 per-question `hybrid.hit_rank` 計算。
 
 不在此表的分數（Latency、Cost、Reliability、Domain Accuracy 等）只計入 `weighted_total`，不觸發 Gate C。
 
