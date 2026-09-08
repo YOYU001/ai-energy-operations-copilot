@@ -809,21 +809,23 @@ https://docs.nvidia.com/nemo/evaluator
 
 # Phase 6 — 建立自己的 Project Benchmark（EnergyOps-Bench）
 
-**狀態**：Planned work（題庫尚未建），但**必須涵蓋 `main` 上已完成的所有 MVP 能力**，否則 model / rule / prompt 改動可能打壞已交付的功能卻不影響任何 EnergyOps-Bench 數字。
+**狀態**：Planned work（題庫尚未建），但**必須涵蓋 `main` 上已完成的每一項 MVP 能力**，否則 model / rule / prompt 改動可能打壞已交付的功能卻不影響任何 EnergyOps-Bench 數字。
 
-### 題型分佈（含 Step 13 的三項 rule 分析）
+### 題型分佈
 
-| 題型 | 題數 | 對應 `main` 能力 |
-|---|---:|---|
-| Document QA | 20 | `/assistant` + RAG（`search_documents`） |
-| Fault Diagnosis | 15 | `/datasets/{id}/analysis`（`BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT`） |
-| Time-series QA | 15 | `/assistant` + dataset tools |
-| RAG Retrieval | 15 | `run_retrieval_benchmark.py` 題庫 |
-| **Battery Scheduling** | 10 | `/datasets/{id}/schedule`（`battery_scheduling_v1`） |
-| **Cost Estimation** | 5 | `/datasets/{id}/cost`（`cost_estimation_v1`） |
-| **Green Operations Index** | 5 | `/datasets/{id}/green-operations-index`（`green_operations_index_v1`） |
-| Safety / Hallucination | 5 | groundedness gate、rule safety veto |
-| Management Summary | 5 | `/datasets/{id}/report`（Step 14） |
+| 題型 | 題數 | 對應 `main` 能力 | Source of truth |
+|---|---:|---|---|
+| Document QA | 15 | `/assistant` + RAG（`search_documents`） | `spike/test_questions.json`、`run_answer_accuracy_benchmark.py` |
+| Fault Diagnosis | 15 | `GET/POST /datasets/{id}/analysis`（`BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT`） | `backend/app/services/rule_engine.py`、`backend/tests/test_analysis_endpoint.py` |
+| Time-series QA | 10 | `/assistant` + dataset tools | `backend/tests/test_datasets_api.py` |
+| RAG Retrieval | 15 | `run_retrieval_benchmark.py` 題庫 | `backend/scripts/run_retrieval_benchmark.py`、`retrieval_metrics.py` |
+| Battery Scheduling | 10 | `GET/POST /datasets/{id}/schedule`（`battery_scheduling_v1`） | `backend/app/services/battery_scheduling.py`、`price_classification.py`、`backend/tests/test_step13_*` |
+| Cost Estimation | 5 | `GET/POST /datasets/{id}/cost`（`cost_estimation_v1`） | `backend/app/services/cost_estimation.py`、`cost_intervals.py`、`backend/tests/test_step13_*` |
+| Green Operations Index | 5 | `GET/POST /datasets/{id}/green-operations-index`（`green_operations_index_v1`） | `backend/app/services/green_operations_index.py`、`backend/tests/test_step13_*` |
+| Case Similarity | 10 | `GET /cases/{case_id}/similar`、`POST /cases/search` | `backend/app/services/case_similarity.py`、`backend/tests/test_cases_api.py` |
+| Role / Persona Behavior | 5 | conversation `role_mode` | `backend/app/main.py` `ROLE_MODE_FRAMING`、`RoleMode` Literal（`schemas.py`） |
+| Safety / Hallucination | 5 | groundedness gate、rule safety veto | `backend/app/services/groundedness.py`、`battery_scheduling.py` safety branches |
+| Management Summary | 5 | `GET/POST /datasets/{id}/report`（Step 14，`analysis_report_v1`） | `backend/app/services/analysis_report.py`、`backend/tests/test_analysis_report.py` |
 
 Test Case schema（沿用，非新增）：
 
@@ -838,41 +840,80 @@ Test Case schema（沿用，非新增）：
 }
 ```
 
-### Step 13 三類的 acceptance metrics（依現有 API contract、deterministic rule 與既有測試設計，不可憑空編造）
+---
 
-這三類的規則是 **deterministic**（`evaluate_battery_scheduling` / `evaluate_cost_estimation` / `evaluate_green_operations_index` 皆為純函式），所以對固定的 synthetic fixture，「正確輸出」是唯一且可精確比對的。已有的 `backend/tests/test_step13_*.py` 與 `test_step13_synthetic_integration_validation.py` 就是這些 metric 的參考實作。
+### Acceptance metrics（每條 enum / threshold / formula / status 都標 Source of truth，避免 roadmap 與實作漂移）
 
-**Battery Scheduling**（`POST /datasets/{id}/schedule` → `ScheduleRunResponse`，每列 `ScheduleRecommendation`）
+> **通用原則**：Step 13 三類與 Analysis Report 的規則是 **deterministic 純函式**（`evaluate_battery_scheduling` / `evaluate_cost_estimation` / `evaluate_green_operations_index` / `build_analysis_report`），對固定 fixture「正確輸出」唯一且可精確比對。`backend/tests/test_step13_*.py`、`test_analysis_report.py`、`test_cases_api.py` 就是這些 metric 的參考實作 —— 建 benchmark 時**沿用**其斷言，不重寫規則測試。
 
-| 檢查 | 通過條件 |
-|---|---|
-| Correct action | 每列 `action ∈ {"charge","discharge","idle","hold"}` 與 fixture 的預期值**逐列完全相等**（deterministic rule，action label 容差 = 0） |
-| Correct price class | 每列 `price_classification ∈ {"low","normal","high"}` 與預期相等 |
-| **Safety-rule violation（hard fail）** | 任一列若 `battery_temperature ≥ 40` 或 `battery_health_status == "critical"` 或 `battery_soc ≤ 20`（`SOC_SAFETY_THRESHOLD`）或 `battery_soh < 80`（`SOH_VETO_THRESHOLD`），其 `action` 必須是 `hold` 或 `idle`，**絕不可**是 `charge` / `discharge`。出現任一違反 = 整個 case FAIL，且觸發第 12 節的 safety hard gate |
-| insufficient-data 行為 | 對「所有 `_REQUIRED_COLUMNS` 皆缺」的 fixture，`evaluated_row_count == 0`，回應仍為 HTTP 200 且不誤觸任何 charge/discharge |
+#### Battery Scheduling — `list[ScheduleRecommendation]`（`ScheduleRunResponse`）
 
-**Cost Estimation**（`POST /datasets/{id}/cost` → `CostRunResponse`，`per_site` + `dataset_aggregate`）
+| 檢查 | 通過條件 | Source of truth |
+|---|---|---|
+| Correct action | 每列 `action ∈ {"charge","discharge","idle","hold"}` 與 fixture 預期**逐列相等**（deterministic，容差 0） | `battery_scheduling.py`（`_build_recommendation` 回傳的四個 `action=` 字面值） |
+| Correct price class | 每列 `price_classification ∈ {"low","neutral","high"}` 與預期相等 | `price_classification.py` `classify_price`（docstring：`"low" | "neutral" | "high"`）；**沒有 `normal`** |
+| Discharge-only veto（SOC / SOH） | fixture 中 `battery_soc <= 20`（`SOC_SAFETY_THRESHOLD`）或 `battery_soh < 80`（`SOH_VETO_THRESHOLD`）的列：`action != "discharge"`。**在安全條件下仍可 `charge`**（`charge_condition` 成立時 rule 會回 `charge`） | `battery_scheduling.py` Step 3（`soc_low`：charge 或 idle）、Step 4（`soh_low`：charge 或 hold）；`test_low_soc_with_charge_condition_charges`、`test_soh_low_with_charge_condition_charges` |
+| **Blanket safety veto（temp / critical health）— hard fail** | fixture 中 `battery_temperature >= 40`（`TEMPERATURE_SAFETY_THRESHOLD`）或 `battery_health_status == "critical"` 的列：`action` 必為 `"idle"`（**既不 charge 也不 discharge**）。出現 `charge`/`discharge` = case FAIL + 觸發第 12.3 safety hard gate | `battery_scheduling.py` Step 1（`temp_critical` → `action="idle"`）、Step 2（`health_critical` → `action="idle"`） |
+| insufficient-data 行為 | 「所有 `_REQUIRED_COLUMNS` 皆缺」的列：`action == "hold"` 且 `warnings` 含 `"insufficient_row_data"`；整體回應 HTTP 200 | `battery_scheduling.py`（`not any_column_present` 分支）；`test_step13_*` 空欄位情境 |
 
-| 檢查 | 通過條件 |
-|---|---|
-| Energy cost 數值 tolerance | `total_energy_cost` 與 fixture 手算值（`Σ grid_import_kw × duration_hours × electricity_price`）的相對誤差 ≤ `1e-6` |
-| Arbitrage 數值 tolerance | `total_arbitrage_saving` 與手算值（放電 `+power×dur×price`、充電 `−|power|×dur×price`）相對誤差 ≤ `1e-6` |
-| Over-contract flags | `over_contract_penalty_flags` 的數量與被標記的 interval 與預期**完全一致** |
-| Multi-site 一致性 | `dataset_aggregate` 的金額 == `Σ per_site`（同 tolerance） |
-| Warning 行為 | 對「有時間缺口 / 末列不完整」的 fixture，`warnings: list[AnalysisNote]` 至少含對應 `type` 的一筆 |
-| insufficient-data 行為 | 對「零個 valid interval」的 fixture，回應 HTTP 200、金額為 0、不 crash |
+#### Cost Estimation — `CostRunResponse`（`per_site` + `dataset_aggregate: CostSiteResult`）
 
-**Green Operations Index**（`POST /datasets/{id}/green-operations-index` → `GreenOpsRunResponse`）
+| 檢查 | 通過條件 | Source of truth |
+|---|---|---|
+| Energy cost 數值 | `total_energy_cost` 對 fixture 手算值（`Σ grid_import_kw × duration_hours × electricity_price`）滿足 combined tolerance（見下） | `cost_estimation.py` `_evaluate_site` |
+| Arbitrage 數值 | `total_arbitrage_saving` 對手算值（放電 `+|power|×dur×price`、充電 `−|power|×dur×price`、`battery_power_kw` 為 0 或缺 → 該 interval 貢獻 0）滿足 combined tolerance | `cost_estimation.py` `_evaluate_site` |
+| **Combined tolerance（benchmark engineering choice，非既有 contract）** | `abs(actual − expected) <= max(abs_tol, rel_tol × abs(expected))`，`abs_tol = 1e-6`、`rel_tol = 1e-9`。`expected == 0`（例如全 `battery_power_kw == 0` 的 fixture，預期 arbitrage = 0）時由 `abs_tol` 決定，**不做除以 0 的相對誤差** | — （tolerance 是評測工程選擇，程式碼未定義；標示清楚） |
+| Over-contract flags | `over_contract_penalty_flags`（`list[ScoringSignalFlag]`，`signal == "over_contract_risk"`）的數量與被標記的 interval 與預期**完全一致** | `cost_estimation.py`（`evaluate_over_contract_risk_mask`）、`scoring_signals.py` |
+| Multi-site 一致性 | `dataset_aggregate.total_energy_cost / total_arbitrage_saving` == `Σ per_site`（direct sum，非加權平均；同 combined tolerance） | `cost_estimation.py` `_aggregate_sites`（docstring：direct sum across sites） |
+| **`limitations` vs `warnings`** | 「末列不完整」→ 檢查 `limitations` 含一筆 `AnalysisNote.type == "last_row_excluded"`；**真正的時間缺口**才檢查 `warnings`（`type != "last_row_excluded"` 的 note） | `cost_estimation.py`：`limitations = [n for n in notes if n.type == "last_row_excluded"]`、`warnings = [n ... if n.type != "last_row_excluded"]`；`test_last_row_excluded_reported_as_limitation_not_warning` |
+| insufficient-data 行為 | 「零個 valid interval」的 fixture：回應 HTTP 200、金額為 0.0、不 raise | `test_step13_*` 空資料集情境 |
 
-| 檢查 | 通過條件 |
-|---|---|
-| Component 分數界限 | 4 個 component 分數各自 ∈ `[0, max_score]`（max 分別為 `pv_utilization 25 / battery_operation 20 / grid_dependency 20 / battery_health 25`） |
-| Total 上限 | `total_score`（含 `second_life_bonus`）≤ 100 |
-| Golden fixture 數值 tolerance | 對 golden fixture，`total_score` 與手算值誤差 ≤ `0.01` |
-| insufficient-data 行為 | 對「缺 `compute_valid_intervals` 所需欄位」的 fixture，每個 component `status == "insufficient_data"` 且 `total_score is None`（不是 0） |
-| Second-life bonus 條件 | `second_life_bonus` 只有在重用的 `BATTERY_SHOULD_DISCHARGE_BUT_DID_NOT` 規則判定 eligible 且無 safety veto 時才 > 0 |
+#### Green Operations Index — `GreenOpsRunResponse`
 
-> 這三類的 fixture 直接沿用 `scripts/synthetic_step13/` 既有合成資料 + `backend/tests/test_step13_*` 的斷言，EnergyOps-Bench 只是把它們包成統一 case 格式並納入 regression 報告，不是重寫規則測試。
+| 檢查 | 通過條件 | Source of truth |
+|---|---|---|
+| Component 分數界限 | 4 個 `GreenOpsComponentScore.score` 各自 ∈ `[0, max_score]`，`max_score` = `pv_utilization 25 / battery_operation 20 / grid_dependency 20 / battery_health 25` | `green_operations_index.py` `COMPONENT_MAX_SCORES` |
+| Component status | 每個 component `status ∈ {"computed", "insufficient_data"}` | `green_operations_index.py`（`status="computed"` / `status="insufficient_data"`）；`schemas.py` `GreenOpsComponentScore.status # "computed" | "insufficient_data"` |
+| Total 上限 | `total_score`（4 component 上限 90 + `second_life_bonus` 上限 10）≤ 100 | `COMPONENT_MAX_SCORES` 合計 90 + `_compute_second_life_bonus` 最大 10.0 |
+| Golden fixture 數值 | golden fixture 的 `total_score` 對手算值滿足上文 combined tolerance（`abs_tol = 1e-6`、`rel_tol = 1e-9`） | `green_operations_index.py` `_sum_total_score` |
+| insufficient-data 行為 | 「缺 `compute_valid_intervals` 所需欄位」的 fixture：每個 component `status == "insufficient_data"`、`total_score is None`（**不是 0**） | `green_operations_index.py`（`intervals` 為空時的分支）；`test_green_ops_total_score_none_reads_as_insufficient_data` |
+| **Second-life bonus 條件（依實際輸入，與放電規則無關）** | `second_life_bonus` 由 `battery_is_second_life` + `battery_health_status` + `battery_temperature` + 資料完整性決定：<br>• 至少一個 second-life 列有 confirmed-unsafe health（不在 `{"normal","warning"}`）或 `temperature >= 40` → `0.0`<br>• 所有 second-life 列 health + temperature 皆完整且無 unsafe → `10.0`<br>• 部分 second-life 列資料不完整、無 confirmed-unsafe → `None`<br>• 資料集根本沒有 second-life 列 → `0.0`<br>• 缺 `battery_is_second_life`/`battery_health_status`/`battery_temperature` 任一欄 → `None` | `green_operations_index.py` `_compute_second_life_bonus`（docstring 三態 + `required` 欄位檢查） |
+
+#### Case Similarity — `list[CaseSearchResult]`（`GET /cases/{case_id}/similar`、`POST /cases/search`）
+
+| 檢查 | 通過條件 | Source of truth |
+|---|---|---|
+| Top-k 命中 | 對固定 query（或 `case_id`），已知最相關的 seed case 的 `case_id` 出現在回傳結果的 top-k 內（seed 資料為 `scripts/seed_case_records.py` 的 13 筆合成案例） | `case_retrieval.py` / `case_similarity.py`；`test_cases_api.py` |
+| 排序 | 結果依 `final_score` 由高到低排序 | `case_similarity.py` `score_candidates`（呼叫 `score_case` 後排序） |
+| Label ⟺ 分數 bucket（self-consistency） | 每筆 `confidence ∈ {"high","medium","low"}` 對應其 `final_score` 落在 `CONFIDENCE_THRESHOLDS = {"high": 0.85, "medium": 0.70}` 的 bucket；`case_similarity ∈ {"高度語意相似","中度語意相似","低度語意相似"}` 對應 `semantic_score` 落在 `CASE_SIMILARITY_THRESHOLDS = {"high": 0.80, "medium": 0.55}` 的 bucket | `case_similarity.py` `confidence_for_score`、`case_similarity_label`。**注意**：這兩組 threshold 在程式碼中明確標為 `PROVISIONAL, NOT CALIBRATED`，所以只查「label 與分數自洽」，不當作絕對品質門檻 |
+| `top_k` 邊界 | `POST /cases/search` 的 `top_k` 預設 5、`1 ≤ top_k ≤ 20`；超出範圍 → HTTP 422；`len(results) == min(top_k, seeded_case_count)`（`POST /cases/search` 無低分 cutoff，永遠回滿 `top_k`） | `schemas.py` `CaseSearchRequest.top_k = Field(default=5, ge=1, le=20)`；`PROGRESS.md` 已知限制「無 cutoff」 |
+| 不外洩答案欄位 | 回應的每筆**不得**含 `root_cause` / `operator_action` / `resolution_result`（僅 `GET /cases/{case_id}` 才有） | `schemas.py` `CaseSearchResult` docstring |
+
+#### Role / Persona Behavior — conversation `role_mode`
+
+`role_mode ∈ {"operator","engineer","executive","training"}`（`RoleMode` Literal，`schemas.py`）。`ROLE_MODE_FRAMING`（`main.py`）**只**在 system prompt 加「語氣 / 深度 / 資訊密度」framing，**絕不改變 tool eligibility、evidence 要求或 Internal Knowledge Only 強制**（`main.py` 註解明訂）。
+
+| 檢查 | 通過條件 | Source of truth |
+|---|---|---|
+| Factual grounding 不變 | 同一問題在四種 `role_mode` 下，`# Confirmed facts / Finding` 與 `# Evidence` 段落抽出的數字 / 人名 / 日期 claim **集合完全相同** | `groundedness.py` claim 抽取；`main.py` `ROLE_MODE_FRAMING` 註解 |
+| Tool eligibility 不變 | 同一問題在四種 mode 下，實際發生的 tool call 名稱集合相同 | `main.py`（role_mode 不進 `_tools_for_turn` / capability guard） |
+| Groundedness gate 不變 | 四種 mode 的回答都通過 groundedness gate（無 `finish_reason == "ungrounded"` 相對 baseline 的新增） | `main.py` Phase 2 gate |
+| 結構不變 | 四種 mode 都產生完整七段式標題 | `main.py` `_SEVEN_PART_INSTRUCTION` |
+| 允許的差異（soft check） | 只允許語氣與深度差異，例如：`training` 回答字數 > `operator` 回答字數；`operator` 回答的領域縮寫（SOC/BMS/C-rate…）密度 < `engineer` 回答 | `ROLE_MODE_FRAMING` 各 mode 的 framing 文字 |
+| 非法 mode | 建立 / 更新 conversation 帶非 Literal 值 → HTTP 422 | `schemas.py` `RoleMode = Literal[...]` |
+
+#### Management Summary（Step 14 Analysis Report）— `AnalysisReportRunResponse` / `AnalysisReportResult`
+
+| 檢查 | 通過條件 | Source of truth |
+|---|---|---|
+| Rule 版本與必要欄位 | `rule_version == "analysis_report_v1"`；`sections` 恰含 6 個 `key`：`dataset_overview`、`anomaly_diagnosis`、`battery_schedule`、`similar_cases`、`cost_estimate`、`green_operations_index` | `analysis_report.py`（`RULE_VERSION`、`SECTION_*` 常數） |
+| Section status enum | 每個 `ReportSection.status ∈ {"included","not_run","manual_lookup"}` | `schemas.py` `ReportSection.status` 註解 |
+| 固定 section 狀態 | `dataset_overview.status == "included"`（永遠）；`similar_cases.status == "manual_lookup"`（永遠，不會是 included / not_run） | `analysis_report.py` `_dataset_overview_section`、`_similar_cases_section`；`test_all_sub_analyses_present_all_sections_included`、`test_no_sub_analyses_only_overview_included_rest_not_run` |
+| Sub-analysis 條件狀態 | `anomaly_diagnosis` / `battery_schedule` / `cost_estimate` / `green_operations_index` 四個：對應 sub-analysis 有跑 → `status == "included"`；沒跑 → `status == "not_run"` 且 `note` 非空 | 同上兩個測試 + `test_partial_only_anomaly_present` |
+| Provenance | `status == "included"` 的 section：`source_analysis_run_id is not None` 且 `source_created_at` == 該 sub-run 的 `created_at` | `test_all_sub_analyses_present_all_sections_included`（`assert sections[key].source_analysis_run_id is not None` / `source_created_at == RUN_AT`） |
+| Limitations | `ReportLimitation.kind ∈ {"section_not_run","snapshot_staleness","data_quality"}`；有 not-run section → 至少一筆 `kind == "section_not_run"`；子分析快照比報告舊 → 一筆 `kind == "snapshot_staleness"` | `schemas.py` `ReportLimitation.kind`；`test_no_sub_analyses_only_overview_included_rest_not_run`（`assert "section_not_run" in kinds` / `"snapshot_staleness" in kinds`） |
+| Findings / actions | 有任一 sub-analysis → `key_findings` 非空；異常子分析存在時 `suggested_actions` 反映之（例如含「檢查 BMS 放電授權」） | `test_all_sub_analyses_present_all_sections_included`、`test_partial_only_anomaly_present` |
+| 缺料行為 | 空資料集 → 不 raise、`row_count == 0`、`site_count == 0`、`dataset_overview.status == "included"` 且 summary 含「0 筆」；green_ops `total_score is None` → 該 section `status == "included"` 但 summary 含「資料不足」 | `test_empty_dataset_does_not_raise_and_reports_zero_rows`、`test_green_ops_total_score_none_reads_as_insufficient_data` |
 
 ---
 
@@ -1059,11 +1100,15 @@ Quality Gate
 
 ### 12.2 加權總分
 
+`sub_score_i` 已正規化到 0–100，所以加權後必須除以權重總和，否則結果會落在 0–10000 而不是 ADOPT 門檻用的 0–100：
+
 ```text
-weighted_total = Σ ( weight_i × sub_score_i ) ，其中 Σ weight_i = 100
+weighted_total = Σ ( weight_i × sub_score_i ) / Σ ( weight_i )
 ```
 
-EnergyOps 權重（可依專案調整，但必須加總為 100）：
+若權重以百分比表示且 `Σ weight_i = 100`，即等同於 `Σ ( weight_i × sub_score_i ) / 100`；也可直接把權重寫成加總為 1 的分數。`weighted_total` 恆落在 `[0, 100]`。
+
+EnergyOps 權重（可依專案調整，加總為 100 或 1 皆可）：
 
 ```text
 RAG Accuracy       30
@@ -1072,15 +1117,20 @@ Domain Accuracy    20
 Latency            10
 Cost               10
 Reliability        10
+（Σ = 100）
 ```
+
+`weighted_total` 只用於 12.4 的決策門檻；**12.3 的 hard gates 完全獨立於 `weighted_total`**：任一 hard gate 不過即 REJECT，不論加權總分多高。
 
 ### 12.3 Hard gates（任一不過 ⇒ 直接 REJECT，不看 weighted_total）
 
 ```text
-1. Groundedness sub-score ≥ 60           （≈ judge 3.4 / 5；低於此代表防幻覺不合格）
-2. EnergyOps-Bench safety-rule violations == 0
-   （Battery Scheduling 在 temp≥40 / health=critical / SOC≤20 / SOH<80 時
-    出現 charge/discharge 即為 violation）
+1. Groundedness sub-score >= 60          （≈ judge 3.4 / 5；低於此代表防幻覺不合格）
+2. EnergyOps-Bench safety-rule violations == 0，定義為 Battery Scheduling 出現：
+   (a) temp >= 40 或 health_status == "critical" 的列 action 不是 "idle"
+       （這類列 rule 必回 "idle"，出現 charge 或 discharge 都是 violation）；或
+   (b) battery_soc <= 20 或 battery_soh < 80 的列 action == "discharge"
+       （這類列只禁止放電；在 charge_condition 成立下回 "charge" 是正確行為，不是 violation）
 3. 相對 baseline，任一 hard-gated metric 的 sub-score 退步 > 5 分
 ```
 
