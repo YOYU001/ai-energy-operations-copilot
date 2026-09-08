@@ -833,7 +833,7 @@ https://docs.nvidia.com/nemo/evaluator
 | **RAG Retrieval** | Implemented + measurable | `hit@k`（見 §12.3 對 `hit@k` 的定義）由 `run_retrieval_benchmark.py` 對 `spike/test_questions.json` 產出。 | `backend/scripts/run_retrieval_benchmark.py`、`retrieval_metrics.py` | runner 已存在（手動執行，有 API 費用）；aggregate 由 per-question `hit_rank` 計算 |
 | **Document QA / Answer Accuracy** | Implemented + measurable | judge `correctness` / `groundedness` / `completeness`（1–5）由 `run_answer_accuracy_benchmark.py` 對 `spike/test_questions.json` 中 `retrieval_eval_eligible` 子集產出。 | `backend/scripts/run_answer_accuracy_benchmark.py` | runner 已存在（手動執行，有 API 費用） |
 | **Safety / Hallucination** | Implemented + measurable（floor only） | implemented **high-risk-fact floor**：`groundedness.py` 只檢查 evidence-bound sections 中可抽取的 numeric 與 labeled-name claim（pass/fail）。**不能攔截所有 qualitative fabrication**；完整 semantic groundedness scorer 為 **Planned**，在它就緒前不得把本能力標成全面 measurable。 | `backend/app/services/groundedness.py`（module docstring 已聲明其為 floor、抓不到定性錯誤） | 直接沿用 `test_groundedness.py`（涵蓋 floor 的行為，非定性正確性） |
-| **Role / Persona Behavior** | Planned（部分 instrumentation 未就緒） | 對同一 assistant fixture，四種 `role_mode` 各跑一次，斷言**不變量**（不要求逐字相同）：① 提供給模型的 tool schemas（`_tools_for_turn`）與 capability-guard 判定（`looks_like_diagnostic_question`）在四種 mode 下相同；② 每一條實際產生的 claim 都通過 groundedness gate；③ terminal outcome 等於 fixture 宣告的 `expected_terminal_outcome`（見下方「Terminal outcome」）；④ 產生七段式標題；⑤ 非 Literal `role_mode` → HTTP 422。**允許**差異：語氣、深度、資訊密度、引用的有據事實數量、在同一組 eligible 工具中實際選用的子集。**未就緒**：目前的 chat runner 不持久化 `finish_reason` / `status`，②③ 需要新的 runner instrumentation（Planned）。 | `backend/app/main.py`（`ROLE_MODE_FRAMING` 只加 framing、不進 `_tools_for_turn` / capability guard；`_SEVEN_PART_INSTRUCTION`）、`schemas.py` `RoleMode = Literal[...]` | Planned：不計入 current baseline |
+| **Role / Persona Behavior** | Planned（部分 instrumentation 未就緒） | 對同一 assistant fixture，四種 `role_mode` 各跑一次，斷言**不變量**（不要求逐字相同）：① 提供給模型的 tool schemas（`_tools_for_turn`）與 capability-guard 判定（`looks_like_diagnostic_question`）在四種 mode 下相同；② 整份回應通過現行 **high-risk-fact floor**，即 `find_unsupported_claims(response, evidence)` 回傳空 list（此 floor 只涵蓋 evidence-bound sections 中可抽取的 numeric / labeled-name claim）；③ terminal outcome 等於 fixture 宣告的 `expected_terminal_outcome`（見下方「Terminal outcome」）；④ 產生七段式標題；⑤ 非 Literal `role_mode` → HTTP 422。**允許**差異：語氣、深度、資訊密度、引用的有據事實數量、在同一組 eligible 工具中實際選用的子集。「所有 qualitative 與 quantitative claim 均 grounded」**不是**現有 invariant，延後至 Planned 的 semantic scorer。**未就緒**：目前的 chat runner 不持久化 `finish_reason` / `status`，②③ 需要新的 runner instrumentation（Planned）。 | `backend/app/main.py`（`ROLE_MODE_FRAMING` 只加 framing、不進 `_tools_for_turn` / capability guard；`_SEVEN_PART_INSTRUCTION`）、`schemas.py` `RoleMode = Literal[...]` | Planned：不計入 current baseline |
 | **Time-series QA** | Planned | 未來 runner 應：使用 dataset fixtures、經 conversation/message API（`POST /conversations/{id}/messages`）觸發 dataset tools、比對「模型回答中的數值 / 聚合結果」對 fixture 的預期。精確 pass 條件於 runner 實作時、對當時的 `main` contract 定案。**現況**：沒有 compatible runner（`run_answer_accuracy_benchmark.py` 只處理文件檢索題，不適用），不計入 current pass rate。 | 未來 runner + 屆時的 `test_datasets_api.py` / dataset-tool 斷言 | Planned：不計入 current baseline |
 
 > 上表中每個 **Planned** 項在 EnergyOps-Bench 實際建置前，只定義形狀與 source of truth；精確 pass 條件於實作時對當時的 test 定案，不在本 roadmap 預先寫死。
@@ -971,8 +971,8 @@ FAIL
 當這套 suite 被當成本專案的 regression gate，覆蓋範圍應涵蓋：
 
 - Phase 5 的 Current baseline 兩支 runner（retrieval hit@k、answer-accuracy judge 分數）
-- Phase 6 中 Status = `Implemented + measurable` 的類別（Step 13 三類、Fault Diagnosis、CSV Ingestion、Case Similarity、Management Summary、Safety/Hallucination gate）—— 這些已在 `main` 完成，regression suite 若不含，rule / model 改動可能打壞已交付功能卻不被偵測。Phase 6 中 Status = `Planned` 的類別（Role/Persona、Time-series QA）在其 runner 就緒前不列入。
-- **§12.3 的 Gate A / B / C**：判定與允許退步幅度**一律以 §12.3 的表為準**，本節不另訂門檻。Step 13 三類等 deterministic 類別的 regression 判定是「輸出對 fixture 預期逐項相等 / 數值 tolerance」（即 `energyops_deterministic_pass_rate`，允許退步 0），不是分數比較。任一 Gate 觸發即 FAIL，不看 `weighted_total`。
+- Phase 6 中 Status = `Implemented + measurable` 的類別（Step 13 三類、Fault Diagnosis、CSV Ingestion、Case Similarity、Management Summary）與 Safety / Hallucination high-risk-fact floor —— 這些已在 `main` 完成，regression suite 若不含，rule / model 改動可能打壞已交付功能卻不被偵測。Phase 6 中 Status = `Planned` 的類別（Role/Persona、Time-series QA）在其 runner 就緒前不列入。
+- **§12.3 的 Gate A / B / C / D**：判定與允許退步幅度**一律以 §12.3 為準**，本節不另訂門檻，也不重複定義任何 gate。Safety / Hallucination floor 對應 **Gate D**（`groundedness_floor_contract_pass`，`test_groundedness.py` 全過）；Step 13 三類等 EnergyOps deterministic 類別對應 `energyops_deterministic_pass_rate`（Gate C，允許退步 0），判定是「輸出對 fixture 預期逐項相等 / 數值 tolerance」而非分數比較。任一 Gate 觸發即 FAIL，不看 `weighted_total`。
 
 ---
 
@@ -1063,14 +1063,15 @@ Quality Gate
 **`usd_per_100_evaluated_turns` 定義**（`cost_sub` 只接收此 normalized value，不接收整次 run 的 total spend）：
 
 ```text
-usd_per_100_evaluated_turns = 100 × total_cost_usd / evaluated_turn_count
+usd_per_100_evaluated_turns = 100 × total_incurred_cost_usd / evaluated_turn_count
 ```
 
-- `evaluated_turn_count` = 實際完成評分的 assistant turn 數。
-- **skipped turn**：不計入分母，也不計入 `total_cost_usd`。
-- **retry**：其 generation / judge token 成本全部計入 `total_cost_usd`，但該 logical turn 在分母只算一次。
-- `total_cost_usd` = 依文末「補充」第 2 點的公式（evaluated model + judge model 各自 `input_tokens/1M × input_price + output_tokens/1M × output_price`）加總。
-- `evaluated_turn_count == 0` → `NOT_EVALUATED`（不除以零、不產生 score）。
+- `total_incurred_cost_usd` = 依文末「補充」第 2 點的公式（evaluated model + judge model 各自 `input_tokens/1M × input_price + output_tokens/1M × output_price`）加總，涵蓋**所有實際發生的 token 花費**。
+- **只有 pre-call skip 不計成本**：在任何 generation / judge API call 發生前就跳過的題目（例如缺 fixture、不符資格）—— 這類不計入 `total_incurred_cost_usd`、也不計入分母。
+- **任何已嘗試的 generation 或 judge call，其 token 成本一律保留計入 `total_incurred_cost_usd`**，即使該題最後 timeout / failed / aborted、或被列入 `skipped_questions`。
+- **retry**：所有實際 token 成本全部計入 `total_incurred_cost_usd`。
+- `evaluated_turn_count` = 成功取得評分結果的 logical turn 數，每題最多算一次。
+- `evaluated_turn_count == 0` → `usd_per_100_evaluated_turns` 為 `NOT_EVALUATED`（不除以零、不產生 score、不得 `ADOPT`），但仍**單獨報告** `total_incurred_cost_usd`，不抹除已發生的花費。
 
 ### 12.2 加權總分
 
@@ -1135,15 +1136,23 @@ hit@5 = 13/13 = 100%
 
 **Missing baseline policy**：任一 protected metric 沒有可比對的 baseline（第一次執行、或 baseline 檔缺失）→ 標記 `NOT_EVALUATED`，Gate C 對它不判 pass/fail；且整體 Recommendation 最高只能到 `CONDITIONAL`、不得 `ADOPT`，直到該 metric 有 baseline。
 
+**Gate D — Groundedness floor contract（categorical boolean，獨立於上表）**：
+
+- `groundedness_floor_contract_pass` = `backend/tests/test_groundedness.py` 對現行 deterministic high-risk-fact floor 的 contract tests **全數通過、零失敗**。
+- 不參與 `weighted_total`。
+- `groundedness_floor_contract_pass == false` → 直接 **REJECT**。
+- 該 gate 未執行或結果缺失 → `NOT_EVALUATED`，不得 `ADOPT`（最高 `CONDITIONAL`）。
+- **不併入** `energyops_deterministic_pass_rate` —— 後者維持原本七個 EnergyOps / domain 類別（`Battery Scheduling` / `Cost` / `Green Ops` / `Fault Diagnosis` / `CSV Ingestion` / `Case Similarity` / `Management Summary`），不改名、不混入 groundedness。
+
 ### 12.4 決策門檻
 
-先判 config validation 與 Gate A/B/C，再看 `weighted_total`：
+先判 config validation 與 Gate A/B/C/D，再看 `weighted_total`：
 
 | 條件 | Recommendation |
 |---|---|
 | config validation 失敗 | **INVALID_CONFIG**（不計分） |
-| Gate A / B / C 任一不過 | **REJECT** |
-| Gate 全過，但有任一 §12.1a canonical scorecard input 或 §12.3 protected metric 為 `NOT_EVALUATED` | 最高 **CONDITIONAL**（即使 `weighted_total >= 80` 也不 ADOPT，直到該項有 baseline / 量測值） |
+| Gate A / B / C / D 任一不過 | **REJECT** |
+| Gate 全過，但有任一 §12.1a canonical scorecard input、§12.3 protected metric 或 Gate D 為 `NOT_EVALUATED` | 最高 **CONDITIONAL**（即使 `weighted_total >= 80` 也不 ADOPT，直到該項有 baseline / 量測值） |
 | Gate 全過、無 `NOT_EVALUATED`、`weighted_total >= 80` | **ADOPT** |
 | Gate 全過、無 `NOT_EVALUATED`、`65 <= weighted_total < 80` | **CONDITIONAL**（附「要補什麼才能升到 ADOPT」的具名條件） |
 | Gate 全過、`weighted_total < 65` | **REJECT** |
