@@ -1070,17 +1070,21 @@ usd_per_100_evaluated_turns = 100 × total_incurred_cost_usd / evaluated_turn_co
 
 單次 token 成本 = 依文末「補充」第 2 點的公式（evaluated model + judge model 各自 `input_tokens/1M × input_price + output_tokens/1M × output_price`）。
 
-- **`usage_complete`**：該次 run 中，**每一次** attempted generation / judge call 都取得 terminal usage 物件，**或**由 authoritative billing / reconciliation 來源補齊缺的 token 數。
-- **`usage_complete == false`**（例如 stream 在 finish event 前中斷、runner 未持久化 usage、且無 reconciliation）：
-  - `usd_per_100_evaluated_turns` = `NOT_EVALUATED`；
-  - 不計算 `cost_sub`；不得 `ADOPT`；
-  - 仍報告 `known_incurred_cost_usd`，**明確標為 lower bound（不是完整 total）**；
-  - 同時報告 `missing_usage_call_count`。
-- **`usage_complete == true`**：此時才可稱為 `total_incurred_cost_usd`，並計算 `usd_per_100_evaluated_turns = 100 × total_incurred_cost_usd / evaluated_turn_count`。
+- **`usage_complete`**：該次 run 中，**每一次** attempted generation / judge call 都取得 terminal usage 物件，**或**由 authoritative billing / reconciliation 來源補齊缺的 token 數。`usage_complete` 這個判定**只取決於「usage 是否齊全」，與 `evaluated_turn_count` 是否為 0 無關**。
 - **只有 pre-call skip 不計成本**：在任何 generation / judge API call 發生前就跳過的題目（缺 fixture、不符資格）—— 無 attempted call，因此不計入成本、不計入分母、不影響 `usage_complete`。
 - **任何已呼叫 provider 的 turn（含 timeout / failed / aborted / retry）**都必須有 usage 或 reconciliation，不能靜默當成零成本；retry 的所有實際 token 成本全部計入。
 - `evaluated_turn_count` = 成功取得評分結果的 logical turn 數，每題最多算一次。
-- `evaluated_turn_count == 0` → `usd_per_100_evaluated_turns` 為 `NOT_EVALUATED`（不除以零、不產生 score、不得 `ADOPT`），但仍單獨報告已知的 incurred cost（同上，標為 lower bound）。
+
+**成本回報 truth table**（依 `evaluated_turn_count` 與 `usage_complete` 兩個獨立條件；`usage_complete == true` 永遠使用「完整 total」標籤，不受 `evaluated_turn_count` 是否為 0 影響）：
+
+| `evaluated_turn_count` | `usage_complete` | 成本欄位 | Normalized cost |
+|---|---|---|---|
+| `> 0` | `true` | `total_incurred_cost_usd`（完整 total） | 計算 `usd_per_100_evaluated_turns` 與 `cost_sub` |
+| `> 0` | `false` | `known_incurred_cost_usd`（lower bound，同時報告 `missing_usage_call_count`） | `NOT_EVALUATED`；不計 `cost_sub`；不得 `ADOPT` |
+| `0` | `true` | `total_incurred_cost_usd`（完整 total） | `NOT_EVALUATED`（分母為零，不除以零、不產生 score）；不得 `ADOPT` |
+| `0` | `false` | `known_incurred_cost_usd`（lower bound，同時報告 `missing_usage_call_count`） | `NOT_EVALUATED`；不得 `ADOPT` |
+
+四種情境都**不抹除已發生的成本**（第 1、3 列報完整 total；第 2、4 列報 lower bound）；四種情境只有第 1 列能算出 normalized cost 並餵給 `cost_sub`，其餘三列 `cost_sub` 皆視為 `NOT_EVALUATED`（依 §12.4，任一 required metric 為 `NOT_EVALUATED` 就不得 `ADOPT`）。
 - **Planned instrumentation**：「runner 持久化每次 generation / judge call 的 usage，以及必要的 billing reconciliation」尚未就緒。
 
 ### 12.2 加權總分
