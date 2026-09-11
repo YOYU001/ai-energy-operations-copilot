@@ -972,7 +972,7 @@ FAIL
 
 - Phase 5 的 Current baseline 兩支 runner（retrieval hit@k、answer-accuracy judge 分數）
 - Phase 6 中 Status = `Implemented + measurable` 的類別（Step 13 三類、Fault Diagnosis、CSV Ingestion、Case Similarity、Management Summary）與 Safety / Hallucination high-risk-fact floor —— 這些已在 `main` 完成，regression suite 若不含，rule / model 改動可能打壞已交付功能卻不被偵測。Phase 6 中 Status = `Planned` 的類別（Role/Persona、Time-series QA）在其 runner 就緒前不列入。
-- **§12.3 的 Gate A / B / C / D**：判定與允許退步幅度**一律以 §12.3 為準**，本節不另訂門檻，也不重複定義任何 gate。Safety / Hallucination floor 對應 **Gate D**（`groundedness_floor_contract_pass`，`test_groundedness.py` 全過）；Step 13 三類等 EnergyOps deterministic 類別對應 `energyops_deterministic_pass_rate`（Gate C，允許退步 0），判定是「輸出對 fixture 預期逐項相等 / 數值 tolerance」而非分數比較。任一 Gate 觸發即 FAIL，不看 `weighted_total`。
+- **§12.3 的 Gate A / B / C / D**：判定與允許退步幅度**一律以 §12.3 為準**，本節不另訂門檻，也不重複定義任何 gate。Safety / Hallucination floor 對應 **Gate D**（`groundedness_floor_contract_pass` —— `test_groundedness.py` 純函式契約**加上** `test_chat_streaming_tool_orchestration.py` 指定的 groundedness integration cases，見 §12.3 Gate D）；Step 13 三類等 EnergyOps deterministic 類別對應 `energyops_deterministic_pass_rate`（Gate C，允許退步 0），判定是「輸出對 fixture 預期逐項相等 / 數值 tolerance」而非分數比較。任一 Gate 觸發即 FAIL，不看 `weighted_total`。
 
 ---
 
@@ -1055,23 +1055,33 @@ Quality Gate
 | Groundedness | `groundedness_sub` | 同上 `averages.groundedness`（1–5） | `sub = (raw − 1) / 4 × 100` | benefit | 未產生 → `NOT_EVALUATED` |
 | Domain Accuracy | `energyops_deterministic_pass_rate` | Phase 6 中 Status = `Implemented + measurable` 的 deterministic 類別（Battery Scheduling / Cost / Green Ops / Fault Diagnosis / CSV Ingestion / Case Similarity / Management Summary）之 fixture 通過率 | `sub = 100 × pass / total`（deterministic，理想 100） | benefit | 任一必要類別未跑 → `NOT_EVALUATED` |
 | Latency | `p95_latency_sub` | 該次 run 的 conversation/message flow（`POST /conversations/{id}/messages` SSE）端對端 p95（ms）；非前端 `/assistant` page-load | `sub = clamp(0, 100, 100 × (L_budget − p95) / (L_budget − L_target))` | cost 面 | 未量測 → `NOT_EVALUATED` |
-| Cost | `cost_sub` | `usd_per_100_evaluated_turns`（見下方定義；**不是**整次 run 的 total spend） | `sub = clamp(0, 100, 100 × (C_budget − cost) / (C_budget − C_target))` | cost 面 | 未量測或 `evaluated_turn_count == 0` → `NOT_EVALUATED` |
+| Cost | `cost_sub` | `usd_per_100_evaluated_turns`（見下方定義；**不是**整次 run 的 total spend） | `sub = clamp(0, 100, 100 × (C_budget − cost) / (C_budget − C_target))` | cost 面 | `usage_complete == false`、未量測、或 `evaluated_turn_count == 0` → `NOT_EVALUATED`（不計 `cost_sub`） |
 | Reliability | `reliability_sub` | 該次 run 的 `1 − (message status 為 failed/aborted 的數 / 總 assistant turn 數)` | `sub = raw × 100` | benefit | 未量測 → `NOT_EVALUATED` |
 
 任一 canonical metric 為 `NOT_EVALUATED`：不計算完整 `weighted_total`，Recommendation 不得 `ADOPT`（見 §12.4）。
 
 **`usd_per_100_evaluated_turns` 定義**（`cost_sub` 只接收此 normalized value，不接收整次 run 的 total spend）：
 
+`usd_per_100_evaluated_turns` 只有在 `usage_complete == true`（見下）時才有值：
+
 ```text
-usd_per_100_evaluated_turns = 100 × total_incurred_cost_usd / evaluated_turn_count
+usd_per_100_evaluated_turns = 100 × total_incurred_cost_usd / evaluated_turn_count   （僅當 usage_complete == true）
 ```
 
-- `total_incurred_cost_usd` = 依文末「補充」第 2 點的公式（evaluated model + judge model 各自 `input_tokens/1M × input_price + output_tokens/1M × output_price`）加總，涵蓋**所有實際發生的 token 花費**。
-- **只有 pre-call skip 不計成本**：在任何 generation / judge API call 發生前就跳過的題目（例如缺 fixture、不符資格）—— 這類不計入 `total_incurred_cost_usd`、也不計入分母。
-- **任何已嘗試的 generation 或 judge call，其 token 成本一律保留計入 `total_incurred_cost_usd`**，即使該題最後 timeout / failed / aborted、或被列入 `skipped_questions`。
-- **retry**：所有實際 token 成本全部計入 `total_incurred_cost_usd`。
+單次 token 成本 = 依文末「補充」第 2 點的公式（evaluated model + judge model 各自 `input_tokens/1M × input_price + output_tokens/1M × output_price`）。
+
+- **`usage_complete`**：該次 run 中，**每一次** attempted generation / judge call 都取得 terminal usage 物件，**或**由 authoritative billing / reconciliation 來源補齊缺的 token 數。
+- **`usage_complete == false`**（例如 stream 在 finish event 前中斷、runner 未持久化 usage、且無 reconciliation）：
+  - `usd_per_100_evaluated_turns` = `NOT_EVALUATED`；
+  - 不計算 `cost_sub`；不得 `ADOPT`；
+  - 仍報告 `known_incurred_cost_usd`，**明確標為 lower bound（不是完整 total）**；
+  - 同時報告 `missing_usage_call_count`。
+- **`usage_complete == true`**：此時才可稱為 `total_incurred_cost_usd`，並計算 `usd_per_100_evaluated_turns = 100 × total_incurred_cost_usd / evaluated_turn_count`。
+- **只有 pre-call skip 不計成本**：在任何 generation / judge API call 發生前就跳過的題目（缺 fixture、不符資格）—— 無 attempted call，因此不計入成本、不計入分母、不影響 `usage_complete`。
+- **任何已呼叫 provider 的 turn（含 timeout / failed / aborted / retry）**都必須有 usage 或 reconciliation，不能靜默當成零成本；retry 的所有實際 token 成本全部計入。
 - `evaluated_turn_count` = 成功取得評分結果的 logical turn 數，每題最多算一次。
-- `evaluated_turn_count == 0` → `usd_per_100_evaluated_turns` 為 `NOT_EVALUATED`（不除以零、不產生 score、不得 `ADOPT`），但仍**單獨報告** `total_incurred_cost_usd`，不抹除已發生的花費。
+- `evaluated_turn_count == 0` → `usd_per_100_evaluated_turns` 為 `NOT_EVALUATED`（不除以零、不產生 score、不得 `ADOPT`），但仍單獨報告已知的 incurred cost（同上，標為 lower bound）。
+- **Planned instrumentation**：「runner 持久化每次 generation / judge call 的 usage，以及必要的 billing reconciliation」尚未就緒。
 
 ### 12.2 加權總分
 
@@ -1138,10 +1148,17 @@ hit@5 = 13/13 = 100%
 
 **Gate D — Groundedness floor contract（categorical boolean，獨立於上表）**：
 
-- `groundedness_floor_contract_pass` = `backend/tests/test_groundedness.py` 對現行 deterministic high-risk-fact floor 的 contract tests **全數通過、零失敗**。
+- `groundedness_floor_contract_pass` = 下列**兩組**測試皆全數通過、零失敗：
+  1. `backend/tests/test_groundedness.py` —— 驗證 floor 本身的 extraction / matching 純函式契約。
+  2. `backend/tests/test_chat_streaming_tool_orchestration.py` 的以下 groundedness integration cases —— 驗證 `main.py` 實際接線：floor 有被呼叫、ungrounded 草稿在呈現前被攔截 / 抽換、retry 與 replacement 行為：
+     - `test_grounded_draft_answer_is_shown_as_is`
+     - `test_ungrounded_draft_answer_still_ungrounded_after_retry_is_replaced_before_ever_being_shown`
+     - `test_ungrounded_draft_retried_then_grounded_draft_is_shown`
+     - `test_grounding_retry_skipped_when_insufficient_time_budget_remains`
+     - `test_groundedness_gate_skipped_when_no_evidence_to_check_against`
 - 不參與 `weighted_total`。
-- `groundedness_floor_contract_pass == false` → 直接 **REJECT**。
-- 該 gate 未執行或結果缺失 → `NOT_EVALUATED`，不得 `ADOPT`（最高 `CONDITIONAL`）。
+- 任一指定測試失敗 → `groundedness_floor_contract_pass == false` → 直接 **REJECT**。
+- 任一指定測試未執行或結果缺失 → `NOT_EVALUATED`，不得 `ADOPT`（最高 `CONDITIONAL`）。
 - **不併入** `energyops_deterministic_pass_rate` —— 後者維持原本七個 EnergyOps / domain 類別（`Battery Scheduling` / `Cost` / `Green Ops` / `Fault Diagnosis` / `CSV Ingestion` / `Case Similarity` / `Management Summary`），不改名、不混入 groundedness。
 
 ### 12.4 決策門檻
